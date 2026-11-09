@@ -156,6 +156,7 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
         <button class="bad" id="showUnsub">Unsubscribe</button>
       </div>
       <h2>Episodes</h2>
+      <form class="add" onsubmit="return false" style="margin-bottom:8px"><input id="episodeFilter" type="search" placeholder="Find an episode" autocomplete="off"></form>
       <div class="card" id="episodesList"></div>
     </section>
   </div>
@@ -334,11 +335,33 @@ function sheet(e) {
   add(e.starred ? "Take the Star Away" : "Star", "quiet", () => act(e, e.starred ? "unstar" : "star"));
   add(e.status === 3 ? "Mark Unplayed" : "Mark Played", "quiet", () => act(e, e.status === 3 ? "unplayed" : "played"));
   if (e.onCard && e.key) add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
+  add("Show Notes", "quiet", () => notes(e));
   add("Close", "quiet", async () => closeSheet());
   $("sheet").classList.remove("hidden");
 }
 function closeSheet() { $("sheet").classList.add("hidden"); }
 $("sheet").onclick = e => { if (e.target === $("sheet")) closeSheet(); };
+
+async function notes(e) {
+  const n = await api("pc/notes?podcast=" + encodeURIComponent(e.podcast) + "&uuid=" + encodeURIComponent(e.uuid));
+  const p = $("sheetPanel");
+  p.replaceChildren(el("div", "title", e.title), el("div", "sub", pcLine(e)));
+  if (n.chapters && n.chapters.length) {
+    p.append(el("h2", "", "Chapters"));
+    const t = el("table", "cuts");
+    for (const c of n.chapters) {
+      const tr = el("tr");
+      tr.append(el("td", "", clock(c.start)), el("td", "", c.title));
+      t.append(tr);
+    }
+    p.append(t);
+  }
+  const text = el("p", "", n.text || "No show notes.");
+  text.style.whiteSpace = "pre-wrap";
+  text.style.fontSize = "15px";
+  p.append(text, button("Close", "quiet", async () => closeSheet()));
+  $("sheet").classList.remove("hidden");
+}
 
 async function report(key, eid, title) {
   const r = await api("pc/report?key=" + encodeURIComponent(key) + "&eid=" + encodeURIComponent(eid));
@@ -519,7 +542,9 @@ function renderShow(d) {
   const list = $("episodesList");
   list.replaceChildren();
   if (!d.episodes.length) list.append(el("div", "empty", sh.refreshing ? "Loading…" : "No audio episodes in this feed."));
+  const want = $("episodeFilter").value.trim().toLowerCase();
   for (const e of d.episodes) {
+    if (want && !e.title.toLowerCase().includes(want)) continue;
     const when = join(day(e.date), length(e.duration));
     const id = {key: sh.key, eid: e.eid};
     let sub, btn, pct;
@@ -541,6 +566,7 @@ function renderShow(d) {
     }
     const opts = {progress: pct, cut: e.cut, buttons: [btn]};
     if (e.onCard) opts.onclick = () => report(sh.key, e.eid, e.title);
+    else if (e.pc && e.uuid) opts.onclick = () => notes({podcast: e.pc, uuid: e.uuid, title: e.title, show: sh.title, published: e.date, duration: e.duration});
     if (account.signedIn && e.pc && e.uuid) {
       opts.buttons.unshift(button("Up Next", "quiet", async () => {
         toast((await api("pc/episode", {podcast: e.pc, uuid: e.uuid, action: "last"})).message);
@@ -550,8 +576,10 @@ function renderShow(d) {
   }
 }
 
+$("episodeFilter").oninput = () => refresh();
 function openShow(key) {
   current = key;
+  $("episodeFilter").value = "";
   $("episodesList").replaceChildren();
   $("showArt").removeAttribute("src");
   for (const v of document.querySelectorAll(".view")) v.classList.add("hidden");

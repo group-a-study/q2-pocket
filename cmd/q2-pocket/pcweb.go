@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"q2-pocket/internal/clean"
 	"q2-pocket/internal/pocketcasts"
+	"q2-pocket/internal/sponsor"
 )
 
 // The phone page's Pocket Casts calls, /api/pc/…, behind the same key and X-Q2 header as the rest:
@@ -23,6 +26,7 @@ import (
 //	GET  files; POST file {uuid, action: download|delete}
 //	GET  discover?name=; POST discover {uuid}
 //	GET  report?key=&eid=        what was cut from an episode, and why
+//	GET  notes?podcast=&uuid=    an episode's show notes, as text, and its chapters
 
 type pcEpisodeJSON struct {
 	Podcast    string    `json:"podcast"`
@@ -236,6 +240,25 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 			return
 		}
 		reply(rw, http.StatusOK, map[string]string{"message": res.Message})
+	case route == "notes" && !post:
+		q := r.URL.Query()
+		notes, err := a.pc.ShowNotes(ctx, q.Get("podcast"))
+		if err != nil {
+			fail(errors.New("can't reach Pocket Casts"))
+			return
+		}
+		n := notes[q.Get("uuid")]
+		out := map[string]any{"text": notesText(n.Text), "link": n.Link}
+		if n.ChaptersURL != "" {
+			if b, err := a.pc.Get(ctx, n.ChaptersURL, 1<<20); err == nil {
+				var ch []map[string]any
+				for _, c := range sponsor.JSONChapters(b) {
+					ch = append(ch, map[string]any{"start": c.From, "title": c.Title})
+				}
+				out["chapters"] = ch
+			}
+		}
+		reply(rw, http.StatusOK, out)
 	case route == "report" && !post:
 		q := r.URL.Query()
 		rep := clean.Load(a.opts.dir, q.Get("key"), q.Get("eid"))
@@ -292,4 +315,23 @@ func (w *web) pcAction(rw http.ResponseWriter, ctx context.Context, b pcBody) {
 	a.sy.forget()
 	a.sy.kick()
 	reply(rw, http.StatusOK, map[string]string{"message": msg})
+}
+
+var (
+	paraEnd = regexp.MustCompile(`(?i)<\s*/(p|div|h[1-6]|ul|ol)\s*>`)
+	lineEnd = regexp.MustCompile(`(?i)<\s*(br\s*/?|/li)\s*>`)
+	anyTag  = regexp.MustCompile(`<[^>]*>`)
+	blanks  = regexp.MustCompile(`[ \t]+`)
+	paras   = regexp.MustCompile(`\s*\n\s*\n\s*`)
+	lines   = regexp.MustCompile(` *\n *`)
+)
+
+// notesText is show notes' HTML as plain text: paragraphs and lines kept, tags and entities gone.
+func notesText(s string) string {
+	s = paraEnd.ReplaceAllString(s, "\n\n")
+	s = lineEnd.ReplaceAllString(s, "\n")
+	s = html.UnescapeString(anyTag.ReplaceAllString(s, ""))
+	s = blanks.ReplaceAllString(s, " ")
+	s = paras.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(lines.ReplaceAllString(s, "\n"))
 }

@@ -326,3 +326,10 @@ func TestPhoneAccount(t *testing.T) {
 		t.Errorf("empty password: %d %v", code, out)
 	}
 }
+
+func TestNotesText(t *testing.T) {
+	got := notesText(`<p>Guest:  <b>Ana</b> &amp; friends.</p><p>Links:<br/><a href="x">site</a></p>`)
+	if want := "Guest: Ana & friends.\n\nLinks:\nsite"; got != want {
+		t.Errorf("%q, want %q", got, want)
+	}
+}
