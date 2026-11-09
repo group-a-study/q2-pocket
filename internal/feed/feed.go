@@ -39,6 +39,15 @@ type Episode struct {
 	Type     string    `json:"type,omitempty"`
 	Length   int64     `json:"length,omitempty"` // bytes, as the feed claims; often wrong
 	Image    string    `json:"image,omitempty"`  // its own art (itunes:image), when it has one
+	PC       string    `json:"pc,omitempty"`     // Pocket Casts' id for it, when it came from there
+
+	// For finding sponsor reads (package sponsor): its transcript (Podcasting 2.0) and its MIME
+	// type, its chapters' address, and the YouTube videos ("yt:<id>") and Spotify episodes
+	// ("sp:<id>") its show notes link to.
+	Transcript     string   `json:"transcript,omitempty"`
+	TranscriptType string   `json:"ttype,omitempty"`
+	Chapters       string   `json:"chapters,omitempty"`
+	Links          []string `json:"links,omitempty"`
 }
 
 var ErrNotFeed = errors.New("feed: not an RSS or Atom feed")
@@ -245,6 +254,16 @@ func item(d *xml.Decoder, atom bool) (Episode, error) {
 					ep.Length, _ = strconv.ParseInt(attr(t, "length"), 10, 64)
 				}
 				d.Skip()
+			case name == "transcript" && podcastNS(t.Name):
+				if u, typ := attr(t, "url"), strings.ToLower(attr(t, "type")); u != "" && rank(typ) > rank(ep.TranscriptType) {
+					ep.Transcript, ep.TranscriptType = u, typ
+				}
+				d.Skip()
+			case name == "chapters" && podcastNS(t.Name):
+				ep.Chapters = attr(t, "url")
+				d.Skip()
+			case (name == "description" || name == "summary" || name == "encoded") && len(ep.Links) < maxLinks:
+				ep.Links = appendLinks(ep.Links, raw(d))
 			case name == "content" && strings.Contains(t.Name.Space, "media") && media.URL == "":
 				if u := attr(t, "url"); u != "" && (attr(t, "medium") == "audio" || Audio(attr(t, "type"), u)) {
 					media.URL, media.Type = u, attr(t, "type")
@@ -280,6 +299,78 @@ func done(ep Episode, alt, guid string, media Episode, encType string) Episode {
 		ep.GUID = ep.Title + "|" + ep.Date.UTC().Format(time.RFC3339)
 	}
 	return ep
+}
+
+func podcastNS(n xml.Name) bool {
+	return strings.Contains(strings.ToLower(n.Space), "podcastindex") || strings.Contains(strings.ToLower(n.Space), "podcast-namespace") || n.Space == "podcast"
+}
+
+// rank is how well package sponsor reads a transcript of this MIME type: 0 not at all.
+func rank(typ string) int {
+	switch {
+	case strings.Contains(typ, "vtt"):
+		return 3
+	case strings.Contains(typ, "srt") || strings.Contains(typ, "subrip"):
+		return 2
+	case strings.Contains(typ, "json"):
+		return 1
+	}
+	return 0
+}
+
+const maxLinks = 8
+
+var (
+	ytLink = regexp.MustCompile(`(?:youtube\.com/(?:watch\?(?:[^"'\s<>]*&(?:amp;)?)?v=|live/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})`)
+	spLink = regexp.MustCompile(`open\.spotify\.com/(?:[a-z-]+/)?episode/([A-Za-z0-9]{22})`)
+)
+
+// appendLinks adds the YouTube videos and Spotify episodes show notes link to, each once.
+func appendLinks(out []string, notes string) []string {
+	add := func(id string) {
+		for _, x := range out {
+			if x == id {
+				return
+			}
+		}
+		if len(out) < maxLinks {
+			out = append(out, id)
+		}
+	}
+	for _, m := range ytLink.FindAllStringSubmatch(notes, -1) {
+		add("yt:" + m[1])
+	}
+	for _, m := range spLink.FindAllStringSubmatch(notes, -1) {
+		add("sp:" + m[1])
+	}
+	return out
+}
+
+// raw is an element's character data up to its end, at most 256 KB of it, as written.
+func raw(d *xml.Decoder) string {
+	var b strings.Builder
+	for depth := 1; depth > 0; {
+		tok, err := d.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			for _, a := range t.Attr { // an <a href>'s address
+				if b.Len() < 256<<10 {
+					b.WriteString(" " + a.Value + " ")
+				}
+			}
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			if b.Len() < 256<<10 {
+				b.Write(t)
+			}
+		}
+	}
+	return b.String()
 }
 
 // text is an element's character data, nested elements' included, up to its end, whitespace

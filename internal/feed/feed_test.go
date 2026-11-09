@@ -255,3 +255,28 @@ func TestOPML(t *testing.T) {
 		t.Fatalf("round trip: %v %+v", err, back)
 	}
 }
+
+// The Podcasting 2.0 transcript (the best kind there is) and chapters, and the YouTube and Spotify
+// episodes the show notes link to.
+func TestSponsorSources(t *testing.T) {
+	f, err := Parse(strings.NewReader(`<rss xmlns:podcast="https://podcastindex.org/namespace/1.0"
+		xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>S</title>
+		<item><title>E</title><guid>g</guid><enclosure url="http://x/e.mp3" type="audio/mpeg"/>
+		<podcast:transcript url="http://x/e.html" type="text/html"/>
+		<podcast:transcript url="http://x/e.json" type="application/json"/>
+		<podcast:transcript url="http://x/e.vtt" type="text/vtt"/>
+		<podcast:chapters url="http://x/c.json" type="application/json+chapters"/>
+		<description><![CDATA[Watch <a href="https://www.youtube.com/watch?v=fOCWBhuDdDo">here</a>]]></description>
+		<content:encoded>https://youtu.be/fOCWBhuDdDo and https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk</content:encoded>
+		</item></channel></rss>`))
+	if err != nil || len(f.Episodes) != 1 {
+		t.Fatal(err)
+	}
+	e := f.Episodes[0]
+	if e.Transcript != "http://x/e.vtt" || e.TranscriptType != "text/vtt" || e.Chapters != "http://x/c.json" {
+		t.Errorf("%+v", e)
+	}
+	if len(e.Links) != 2 || e.Links[0] != "yt:fOCWBhuDdDo" || e.Links[1] != "sp:4rOoJ6Egrf8K2IrywzwOMk" {
+		t.Errorf("links %v", e.Links)
+	}
+}

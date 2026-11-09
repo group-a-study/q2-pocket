@@ -1,6 +1,7 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/tag"
 )
 
@@ -92,19 +94,85 @@ func (l *Library) tagTo(ctx context.Context, src, dst string, e EpisodeInfo) (er
 	return tag.Write(src, dst, tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}, cover)
 }
 
-// place moves a whole download into its show's folder: an MP3 tagged on the way, anything else as
-// it came. Cancelled meanwhile (Delete's, maybe), it puts nothing there.
-func (l *Library) place(ctx context.Context, part string, e EpisodeInfo) error {
+// errUncut: nothing to cut from a download (or no cleaner); it is only tagged.
+var errUncut = errors.New("nothing to cut")
+
+// cleanTo writes the download at part to dst without the adverts and sponsor reads the cleaner
+// finds, tagged as tagTo does, its chapters moved with the audio; errUncut when there are none.
+func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, note func(string)) (err error) {
+	if l.o.Clean == nil {
+		return errUncut
+	}
+	defer func() {
+		if p := recover(); p != nil { // a file broken some way not foreseen: it goes in uncut
+			os.Remove(dst)
+			err = errUncut
+		}
+	}()
+	ed, err := l.o.Clean.Clean(ctx, part, cleanEpisode(e), note)
+	if err != nil || ctx.Err() != nil {
+		return cmp.Or(ctx.Err(), err)
+	}
+	if ed == nil || len(ed.Cuts) == 0 {
+		return errUncut
+	}
+	note("Cutting the ads out")
+	var head []byte
+	if h, err := tag.Read(part); err == nil && !h.Big() {
+		h.Retime(func(ms uint32) uint32 { return uint32(ed.Report.Kept(float64(ms)/1000) * 1000) })
+		var cover []byte
+		if !h.HasCover() {
+			cover = l.cover(ctx, e.Image)
+		}
+		head = h.Build(tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}, cover)
+	} else if b, err := os.ReadFile(part); err == nil { // its own tag, as it was
+		head = b[:ed.Stream.TagLen]
+	}
+	in, err := os.Open(part)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	_, err = ed.Stream.Write(in, out, head, ed.Cuts)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(dst)
+		return errUncut // no room for the cut copy, say: it goes in as it came
+	}
+	return nil
+}
+
+// cleanEpisode is an episode as the cleaner takes it.
+func cleanEpisode(e EpisodeInfo) clean.Episode {
+	f := e.Feed
+	return clean.Episode{Key: e.Key, EID: e.EID, Show: e.Show, Title: e.Title, Author: e.Author, Date: e.Date,
+		Duration: e.Duration, URL: f.URL, Podcast: e.PC, UUID: f.PC, Transcript: f.Transcript,
+		TranscriptType: f.TranscriptType, Chapters: f.Chapters, Links: f.Links}
+}
+
+// place moves a whole download into its show's folder: an MP3 cut of its adverts and tagged on the
+// way, anything else as it came. Cancelled meanwhile (Delete's, maybe), it puts nothing there.
+func (l *Library) place(ctx context.Context, part string, e EpisodeInfo, note func(string)) error {
 	if err := os.MkdirAll(filepath.Dir(e.Path), 0o755); err != nil {
 		return fmt.Errorf("can't make the show's folder: %v", err)
 	}
 	src := part
 	if isMP3(e.Path) {
 		tmp := tmpOf(e.Path)
-		switch err := l.tagTo(ctx, part, tmp, e); {
+		err := l.cleanTo(ctx, part, tmp, e, note)
+		if errors.Is(err, errUncut) {
+			err = l.tagTo(ctx, part, tmp, e)
+		}
+		switch {
 		case err == nil:
 			src = tmp
-		case errors.Is(err, tag.ErrNotMP3), errors.Is(err, errTagged):
+		case errors.Is(err, tag.ErrNotMP3), errors.Is(err, errTagged), errors.Is(err, errUncut):
 		case ctx.Err() != nil:
 			os.Remove(tmp)
 			return ctx.Err()

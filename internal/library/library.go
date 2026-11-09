@@ -28,8 +28,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/directory"
 	"q2-pocket/internal/feed"
+	"q2-pocket/internal/pocketcasts"
 	"q2-pocket/internal/q2"
 )
 
@@ -40,17 +42,21 @@ const (
 )
 
 type Options struct {
-	Dir    string       // the app's folder on the card
-	Root   string       // where episodes go: the card's Podcasts folder
-	Client *http.Client // feeds and the directory: with a total timeout
-	Fetch  *http.Client // episodes: no total timeout, stalls watched instead
-	Agent  string       // User-Agent
-	Ready  func() bool  // downloads may run (Wi-Fi up, the card there); nil checks both
+	Dir    string              // the app's folder on the card
+	Root   string              // where episodes go: the card's Podcasts folder
+	Client *http.Client        // feeds and the directory: with a total timeout
+	Fetch  *http.Client        // episodes: no total timeout, stalls watched instead
+	Agent  string              // User-Agent
+	Ready  func() bool         // downloads may run (Wi-Fi up, the card there); nil checks both
+	PC     *pocketcasts.Client // Pocket Casts: its shows' episodes come from its cache; nil for none
+	Clean  *clean.Cleaner      // cuts adverts and sponsor reads from each download; nil for none
 }
 
 type Show struct {
 	Key, URL, Title, Folder string
 	Auto                    bool
+	PC                      string // Pocket Casts' id: its episodes come from Pocket Casts
+	Hidden                  bool   // not subscribed: kept for its episodes in Up Next, Starred…
 }
 
 // cache is feeds/<key>.json.
@@ -104,7 +110,8 @@ type Library struct {
 // ShowInfo is a show as the pages show it.
 type ShowInfo struct {
 	Key, URL, Title, Author, Folder, Image string
-	Auto                                   bool
+	PC                                     string
+	Auto, Hidden                           bool
 	Episodes, OnCard                       int
 	Latest, Checked                        time.Time
 	Refreshing, Fetched                    bool
@@ -122,6 +129,8 @@ type EpisodeInfo struct {
 	OnCard                bool
 	Size                  int64 // on the card
 	Job                   *JobInfo
+	PC                    string       // its show's Pocket Casts id, "" when it has none
+	Feed                  feed.Episode // as its feed (or Pocket Casts) has it
 }
 
 var ErrNoShow = errors.New("that show isn't subscribed")
@@ -154,7 +163,7 @@ func Open(o Options) (*Library, error) {
 		if l.byURL(ol.URL) != nil {
 			continue
 		}
-		s := &show{Show: Show{Key: ol.Key, URL: ol.URL, Title: ol.Title, Folder: ol.Folder, Auto: ol.Auto}}
+		s := &show{Show: Show{Key: ol.Key, URL: ol.URL, Title: ol.Title, Folder: ol.Folder, Auto: ol.Auto, PC: ol.PC, Hidden: ol.Hidden}}
 		if s.Key == "" || l.find(s.Key) != nil { // none, or another show's (a file edited by hand)
 			s.Key, dirty = KeyFor(ol.URL), true
 			for l.find(s.Key) != nil {
@@ -242,16 +251,23 @@ func (l *Library) folderFor(title, key string) string {
 func (l *Library) outlines() []feed.Outline {
 	out := make([]feed.Outline, 0, len(l.shows))
 	for _, s := range l.shows {
-		out = append(out, feed.Outline{Title: s.Title, URL: s.URL, Key: s.Key, Folder: s.Folder, Auto: s.Auto})
+		out = append(out, feed.Outline{Title: s.Title, URL: s.URL, Key: s.Key, Folder: s.Folder, Auto: s.Auto, PC: s.PC, Hidden: s.Hidden})
 	}
 	return out
 }
 
-// OPML is the subscriptions to export.
+// OPML is the subscriptions to export (not the shows kept only for an episode).
 func (l *Library) OPML() []byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return feed.WriteOPML("Q2 Pocket", l.outlines())
+	var subs []feed.Outline
+	for _, o := range l.outlines() {
+		if !o.Hidden {
+			o.Key, o.Folder, o.PC = "", "", ""
+			subs = append(subs, o)
+		}
+	}
+	return feed.WriteOPML("Q2 Pocket", subs)
 }
 
 // saveOPML writes the subscriptions; under l.mu (the write is small).
@@ -267,7 +283,8 @@ func (l *Library) saveCache(key string, b []byte) {
 }
 
 func info(s *show) ShowInfo {
-	si := ShowInfo{Key: s.Key, URL: s.URL, Title: s.Title, Folder: s.Folder, Auto: s.Auto, Refreshing: s.busy}
+	si := ShowInfo{Key: s.Key, URL: s.URL, Title: s.Title, Folder: s.Folder, Auto: s.Auto, Refreshing: s.busy,
+		PC: s.PC, Hidden: s.Hidden}
 	if c := s.c; c != nil {
 		si.Fetched = !c.Checked.IsZero()
 		si.Author, si.Image, si.Checked, si.Err = c.Author, c.Image, c.Checked, c.Err
@@ -279,12 +296,16 @@ func info(s *show) ShowInfo {
 	return si
 }
 
-// Shows is every subscription, by title, with how many episodes are on the card.
+// Shows is every subscription, by title, with how many episodes are on the card (not the shows
+// kept only for an episode).
 func (l *Library) Shows() []ShowInfo {
 	l.mu.Lock()
 	out := make([]ShowInfo, 0, len(l.shows))
 	names := make([]map[string]string, 0, len(l.shows))
 	for _, s := range l.shows {
+		if s.Hidden {
+			continue
+		}
 		out = append(out, info(s))
 		names = append(names, s.names)
 	}
@@ -314,7 +335,7 @@ func (l *Library) episode(s *show, e feed.Episode) EpisodeInfo {
 	eid := EpisodeID(e.GUID)
 	return EpisodeInfo{Key: s.Key, EID: eid, Show: s.Title, Title: e.Title, Date: e.Date, Duration: e.Duration,
 		Length: e.Length, Path: filepath.Join(l.o.Root, s.Folder, s.names[eid]), Author: s.c.Author,
-		Image: cmp.Or(e.Image, s.c.Image)}
+		Image: cmp.Or(e.Image, s.c.Image), PC: s.PC, Feed: e}
 }
 
 // onCard is a folder's files by lower-case name; empty when it isn't there. Sizes are looked up
@@ -413,7 +434,7 @@ func (l *Library) Latest(n int) []EpisodeInfo {
 	l.mu.Lock()
 	var out []EpisodeInfo
 	for _, s := range l.shows {
-		if s.c == nil {
+		if s.c == nil || s.Hidden {
 			continue
 		}
 		for i, e := range s.c.Episodes {
@@ -817,7 +838,13 @@ func (l *Library) refresh(ctx context.Context, key string, full bool) error {
 	}
 	l.mu.Unlock()
 
-	r, err := l.fetch(ctx, u, etag, modified, prev == nil)
+	var r *Fetched
+	var err error
+	if pc := s.PC; pc != "" {
+		r, err = l.fetchPC(ctx, pc, u, etag)
+	} else {
+		r, err = l.fetch(ctx, u, etag, modified, prev == nil)
+	}
 
 	l.mu.Lock()
 	s.busy = false
@@ -842,6 +869,9 @@ func (l *Library) refresh(ctx context.Context, key string, full bool) error {
 	default:
 		nc := cacheOf(r.Feed, r.ETag, r.Modified)
 		if prev != nil {
+			if s.PC != "" {
+				adopted(prev.Episodes, nc.Episodes)
+			}
 			renamed(prev.Episodes, nc.Episodes)
 			known := make(map[string]bool, len(prev.Episodes))
 			for _, e := range prev.Episodes {
@@ -879,7 +909,7 @@ func (l *Library) refresh(ctx context.Context, key string, full bool) error {
 		}
 	}
 	s.setCache(c)
-	auto := s.Auto && prev != nil && len(prev.Episodes) > 0
+	auto := s.Auto && !s.Hidden && prev != nil && len(prev.Episodes) > 0
 	b, _ := json.Marshal(c)
 	l.mu.Unlock()
 	l.saveCache(key, b)
@@ -979,6 +1009,7 @@ func (l *Library) Delete(key, eid string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	clean.Forget(l.o.Dir, key, eid)
 	os.Remove(filepath.Dir(e.Path)) // only when empty
 	return nil
 }

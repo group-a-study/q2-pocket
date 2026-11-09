@@ -46,7 +46,8 @@ type JobInfo struct {
 	Key, EID, Show, Title string
 	State                 JobState
 	Err                   string
-	Done, Size            int64 // bytes; Size -1 when unknown
+	Done, Size            int64  // bytes; Size -1 when unknown
+	Note                  string // once downloaded, what it does: "Checking for ads"
 }
 
 type job struct {
@@ -358,7 +359,11 @@ func (d *Downloader) run() {
 		}
 		err := d.l.download(ctx, j, func(done, size int64) {
 			d.mu.Lock()
-			j.Done, j.Size = done, size
+			j.Done, j.Size, j.Note = done, size, ""
+			d.mu.Unlock()
+		}, func(note string) {
+			d.mu.Lock()
+			j.Note = note
 			d.mu.Unlock()
 		})
 		d.finish(j, err)
@@ -427,7 +432,7 @@ var freeBytes = func(path string) (int64, bool) {
 
 // download fetches one episode to its .part, resuming what is there, and renames it into its
 // show's folder once whole. An address refused is tried once more, fresh from the feed.
-func (l *Library) download(ctx context.Context, j *job, progress func(done, size int64)) error {
+func (l *Library) download(ctx context.Context, j *job, progress func(done, size int64), note func(string)) error {
 	e, err := l.Episode(j.Key, j.EID)
 	if err != nil {
 		return permanent{err}
@@ -439,11 +444,11 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	if err != nil {
 		return permanent{err}
 	}
-	err = l.transfer(ctx, u, e, l.partPath(j.Key, j.EID), progress)
+	err = l.transfer(ctx, u, e, l.partPath(j.Key, j.EID), progress, note)
 	var no refused
 	if errors.As(err, &no) {
 		if fresh := l.renewSource(ctx, j.Key, j.EID, u); fresh != "" {
-			err = l.transfer(ctx, fresh, e, l.partPath(j.Key, j.EID), progress)
+			err = l.transfer(ctx, fresh, e, l.partPath(j.Key, j.EID), progress, note)
 		}
 	}
 	if errors.As(err, &no) {
@@ -481,7 +486,7 @@ func removePart(part string) {
 }
 
 // transfer fetches an episode from u to part, resuming what is there, and renames it into place.
-func (l *Library) transfer(ctx context.Context, u string, e EpisodeInfo, part string, progress func(done, size int64)) error {
+func (l *Library) transfer(ctx context.Context, u string, e EpisodeInfo, part string, progress func(done, size int64), note func(string)) error {
 	var off int64
 	var was partInfo
 	if st, err := os.Stat(part); err == nil {
@@ -490,7 +495,7 @@ func (l *Library) transfer(ctx context.Context, u string, e EpisodeInfo, part st
 		}
 	}
 	if was.Size > 0 && off == was.Size { // whole already: only its placing failed
-		return l.place(ctx, part, e)
+		return l.place(ctx, part, e, note)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -618,7 +623,7 @@ func (l *Library) transfer(ctx context.Context, u string, e EpisodeInfo, part st
 		return permanent{errors.New("the episode's file is empty")}
 	}
 	stall.Stop() // tagging a long episode is no stall
-	return l.place(ctx, part, e)
+	return l.place(ctx, part, e, note)
 }
 
 // contentRange is the first byte a Content-Range ("bytes 100-199/200") covers and the whole file's
