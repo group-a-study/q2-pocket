@@ -6,7 +6,7 @@ A podcast app for the **Shanling Q2** running [Q2 Pod](https://github.com/Diamon
 - **Offline:** all of Up Next stays downloaded (or its first few, if you choose), and any episode downloads with a press. Each episode's description goes beside it, and its chapters into it when its publisher gives them, for Q2 Pod's Now Playing.
 - **No ads:** every MP3 it downloads has the ads its host stitched in removed before it lands on the card, and sponsor reads in the episode itself are cut too.
 
-It needs Q2 Pod with card apps (1.4.2 or later). Two things want newer Q2 Pod: Up Next playing straight through in order (firmware that lists `playlist` in `/tmp/q2-addon.caps`), and places moved on your phone arriving on the Q2 (`places`).
+It needs Q2 Pod with card apps (1.4.2 or later). Two things want newer Q2 Pod: Up Next playing straight through in order (firmware that lists `playlist` in `/tmp/q2-addon.caps`), and places moved on your phone arriving on the Q2 (`places`). [Q2 Podcast](https://github.com/group-a-study/q2-podcast) has both.
 
 ## Install
 
@@ -38,7 +38,7 @@ On the Q2 (**Streaming → Pocket**):
 - **Podcasts**: your shows; each has its episodes and **Show Options** (update, download new episodes by themselves, delete downloads, unsubscribe, also in Pocket Casts).
 - **Downloaded**, **Downloads**, **Files** (Pocket Casts Plus' uploaded files), **Discover** (Pocket Casts' Trending, Popular and Featured), **Search Podcasts**, **Sleep Timer**.
 - **Ads & Sponsors**: the switches below, what has been cut so far, how much of Up Next stays downloaded, and whether played episodes are deleted.
-- **Star** on Q2 Pod's Now Playing (a Q2 Pod that has it) stars the episode in Pocket Casts.
+- On [Q2 Podcast](https://github.com/group-a-study/q2-podcast), Q2 Pod made for podcasts: Now Playing's heart is the episode's star in Pocket Casts, its **Description** and **Chapters** pages show what Pocket writes beside the episode, and the side buttons skip 15 seconds back and 30 on, or hold for the chapters.
 - **Sync Now**: syncs at once; it also syncs every three minutes while Pocket runs, and stays on while a podcast plays so your place keeps reaching Pocket Casts.
 
 On the phone page (the QR code): tabs for all of the above. An episode's sheet plays it next or last, takes it out of Up Next, stars it, marks it played or unplayed, downloads it, and shows **what was cut** from it: each cut's times and why. **Settings** has your account, the switches and the optional keys.
