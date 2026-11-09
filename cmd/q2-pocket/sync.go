@@ -82,6 +82,7 @@ type syncer struct {
 	files    *fileList
 	soon     bool   // more to do: the next sync in soonAfter
 	stars    string // /tmp/q2-starred as last written
+	starsOut bool   // written since the start or the last sign-out: the firmware's heart is the star
 }
 
 func newSyncer(a *app) *syncer {
@@ -577,8 +578,10 @@ func (s *syncer) signedOut() {
 	s.mu.Lock()
 	s.lists, s.upnext, s.err, s.at = map[string]*pcList{}, nil, "", time.Time{}
 	s.st.Eps, s.st.Migrated = map[string]*epSync{}, false
+	s.stars, s.starsOut = "", false
 	s.mu.Unlock()
 	s.save()
+	os.Remove(s.a.opts.starred) // Now Playing's heart is My Fav again
 }
 
 // fileList is the account's uploaded files.
@@ -656,10 +659,10 @@ func (s *syncer) writeStarred(eps []pocketcasts.Episode) {
 		}
 	}
 	s.mu.Lock()
-	same := b.String() == s.stars
-	s.stars = b.String()
+	same := b.String() == s.stars && s.starsOut
+	s.stars, s.starsOut = b.String(), true
 	s.mu.Unlock()
-	if !same {
+	if !same { // an empty list too: its file says the account is signed in
 		q2.WriteFile(s.a.opts.starred, []byte(b.String()))
 	}
 }

@@ -333,11 +333,18 @@ func TestPhoneAccount(t *testing.T) {
 	if _, up := call("GET", "pc/upnext", ""); len(up["episodes"].([]any)) != 2 {
 		t.Errorf("up next %v", up)
 	}
+	// signed in, nothing starred: the list is there, empty, so Now Playing's heart is the star
+	if b, err := os.ReadFile(a.opts.starred); err != nil || len(b) != 0 {
+		t.Errorf("starred list %q %v", b, err)
+	}
 	if code, _ := call("POST", "pc/logout", "{}"); code != 200 || a.pc.SignedIn() {
 		t.Fatal("still signed in")
 	}
 	if _, err := os.Stat(filepath.Join(a.opts.dir, "account.json")); err == nil {
 		t.Error("the session stayed on the card")
+	}
+	if _, err := os.Stat(a.opts.starred); err == nil {
+		t.Error("the starred list stayed: the heart would still be the star")
 	}
 	if code, out := call("POST", "pc/login", `{"email":"a@b.c","password":""}`); code != 400 {
 		t.Errorf("empty password: %d %v", code, out)
