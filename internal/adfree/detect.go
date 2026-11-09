@@ -18,6 +18,7 @@ const (
 	WhyBreak  = "an ad break"
 	WhyEnd    = "added after the episode"
 	WhyLength = "the feed's length"
+	WhyOpens  = "the transcript opens with a sponsor"
 )
 
 const (
@@ -35,6 +36,7 @@ type Evidence struct {
 	Peers  [][]uint64 // other episodes' folded hashes
 	Lib    *Library   // adverts found before; nil for none
 	Budget float64    // seconds the feed gives the episode, 0 if it gives none
+	Opens  bool       // a transcript of the episode opens with a sponsor read: it starts with an ad slot
 	Now    time.Time
 }
 
@@ -163,6 +165,11 @@ func Detect(s *mp3.Stream, ev Evidence) Result {
 	}
 	cuts = append(cuts, found...)
 	cuts = union(cuts)
+	if first >= 0 && ev.Opens { // the episode opens with an ad slot: the first part is its advert
+		p := parts[first]
+		cuts = union(append(cuts, Cut{p.From, p.To, WhyOpens}))
+		first = -1
+	}
 	if first >= 0 && ev.Budget > 0 { // the feed's length accounts for the first part: an advert too
 		p := parts[first]
 		left := secs(total - length(cuts))

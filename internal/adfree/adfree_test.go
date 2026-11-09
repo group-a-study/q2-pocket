@@ -288,3 +288,16 @@ func TestSplicesExact(t *testing.T) {
 	}
 	_ = math.Abs
 }
+
+// A transcript that opens with a sponsor read says a short first part is a pre-roll.
+func TestOpens(t *testing.T) {
+	parts := []part{{42.7, sigShow, 1}, {30.1, sigShow, 1}, {600, sigShow, 0}, {68, sigShow, 1}, {700, sigShow, 0}}
+	s, spans := synth(parts, 8)
+	if r := Detect(s, Evidence{}); covers(r.Cuts, spans[0]) {
+		t.Fatalf("first part cut without a reason: %+v", r.Cuts)
+	}
+	r := Detect(s, Evidence{Opens: true})
+	if !covers(r.Cuts, spans[0]) || !covers(r.Cuts, spans[1]) || covers(r.Cuts, Span{spans[2].From, spans[2].From + 40}) {
+		t.Errorf("cuts %+v", r.Cuts)
+	}
+}
