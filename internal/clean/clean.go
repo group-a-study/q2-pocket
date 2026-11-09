@@ -229,14 +229,15 @@ func (c *Cleaner) chapters(ctx context.Context, u string, length float64) []tag.
 	return out
 }
 
-// NotesPath is where an episode's show notes are kept, as text: a hidden .notes folder beside it,
-// the episode's name with .txt (Q2 Pod's Now Playing shows them).
+// NotesPath is where an episode's description is kept, as text: a hidden .description folder beside
+// it, the episode's name with .txt (Q2 Pod's Now Playing shows it).
 func NotesPath(episode string) string {
 	base := filepath.Base(episode)
-	return filepath.Join(filepath.Dir(episode), ".notes", strings.TrimSuffix(base, filepath.Ext(base))+".txt")
+	return filepath.Join(filepath.Dir(episode), ".description", strings.TrimSuffix(base, filepath.Ext(base))+".txt")
 }
 
-// keepNotes keeps an episode's show notes beside it, from Pocket Casts' show notes.
+// keepNotes keeps an episode's description beside it, from Pocket Casts' show notes (the feed's
+// description of the episode).
 func (c *Cleaner) keepNotes(ctx context.Context, e Episode) {
 	if e.Path == "" || e.Podcast == "" || e.UUID == "" || c.PC == nil {
 		return
@@ -263,7 +264,7 @@ var (
 	lines   = regexp.MustCompile(` *\n *`)
 )
 
-// NotesText is show notes' HTML as plain text: paragraphs and lines kept, tags and entities gone.
+// NotesText is a description's HTML as plain text: paragraphs and lines kept, tags and entities gone.
 func NotesText(s string) string {
 	s = paraEnd.ReplaceAllString(s, "\n\n")
 	s = lineEnd.ReplaceAllString(s, "\n")

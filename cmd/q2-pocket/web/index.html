@@ -335,7 +335,7 @@ function sheet(e) {
   add(e.starred ? "Take the Star Away" : "Star", "quiet", () => act(e, e.starred ? "unstar" : "star"));
   add(e.status === 3 ? "Mark Unplayed" : "Mark Played", "quiet", () => act(e, e.status === 3 ? "unplayed" : "played"));
   if (e.onCard && e.key) add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
-  add("Show Notes", "quiet", () => notes(e));
+  add("Description", "quiet", () => notes(e));
   add("Close", "quiet", async () => closeSheet());
   $("sheet").classList.remove("hidden");
 }
@@ -356,7 +356,7 @@ async function notes(e) {
     }
     p.append(t);
   }
-  const text = el("p", "", n.text || "No show notes.");
+  const text = el("p", "", n.text || "No description.");
   text.style.whiteSpace = "pre-wrap";
   text.style.fontSize = "15px";
   p.append(text, button("Close", "quiet", async () => closeSheet()));

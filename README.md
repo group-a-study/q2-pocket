@@ -3,7 +3,7 @@
 A podcast app for the **Shanling Q2** running [Q2 Pod](https://github.com/DiamondBond/q2-pod), with your **Pocket Casts** account and **no ads**. It does everything [q2-podcasts](https://github.com/m-d-e-v/q2-podcasts) does (subscribe by feed or search, download over Wi-Fi, play from the card's `Podcasts` folder, where Q2 Pod resumes each episode and keeps it out of your music library), and:
 
 - **Pocket Casts sync**, as [pocketcli](https://github.com/foforivera/pocketcli) does it from a computer: your podcasts, Up Next, In Progress, New Releases, Starred, History, uploaded Files and Discover; where you are in each episode, both ways; played episodes marked played; the episode you start becomes Up Next's first and goes in your listening history.
-- **Offline:** all of Up Next stays downloaded (or its first few, if you choose), and any episode downloads with a press. Each episode's show notes go beside it, and its chapters into it when its publisher gives them, for Q2 Pod's Now Playing.
+- **Offline:** all of Up Next stays downloaded (or its first few, if you choose), and any episode downloads with a press. Each episode's description goes beside it, and its chapters into it when its publisher gives them, for Q2 Pod's Now Playing.
 - **No ads:** every MP3 it downloads has the ads its host stitched in removed before it lands on the card, and sponsor reads in the episode itself are cut too.
 
 It needs Q2 Pod with card apps (1.4.2 or later). Two things want newer Q2 Pod: Up Next playing straight through in order (firmware that lists `playlist` in `/tmp/q2-addon.caps`), and places moved on your phone arriving on the Q2 (`places`).
@@ -72,6 +72,7 @@ Everything besides the app is kept over updates and removal:
 - `.pocket/config.json`: the phone page's key and PIN, the switches, `download_up_next`, `delete_played`, `idle_minutes`, and the optional `youtube_api_key`, `spotify_client_id`, `spotify_client_secret`.
 - `.pocket/account.json`: the Pocket Casts session (delete it to sign out). `.pocket/sync.json`: each episode's place as last synced.
 - `.pocket/subscriptions.opml`: your shows (Pocket Casts ids kept in their own attributes), `.pocket/feeds/`, `.pocket/queue.json`, `.pocket/partial/`.
+- `Podcasts/<Show>/.description/`: each episode's description, as text, for Now Playing.
 - `.pocket/ads.bin`: the ads learned. `.pocket/frames/`: recent episodes' frames, to compare new ones with. `.pocket/cuts/`: what was cut from each episode and why, which also maps a place in the cut episode to the episode as served, so places sync with your other devices.
 - `Podcasts/<Show>/2024-10-07 - Episode Title.mp3`: the episodes. `Podcasts/Pocket Casts Files/`: uploaded files.
 
