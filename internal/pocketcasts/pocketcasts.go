@@ -42,6 +42,7 @@ const (
 var (
 	ErrSignIn = errors.New("Pocket Casts wants you to sign in again")
 	ErrWrong  = errors.New("that email and password aren't right")
+	ErrPlus   = errors.New("Files need Pocket Casts Plus") // the API refuses them as it does a session
 )
 
 // Token is a signed-in session, kept on the card.
@@ -152,6 +153,9 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 	if !c.SignedIn() {
 		return ErrSignIn
 	}
+	if t := c.Token(); t.Refresh != "" && !t.Expires.IsZero() && time.Until(t.Expires) < time.Minute {
+		c.refresh(ctx) // due: a refusal would cost a request
+	}
 	b, err := c.do(ctx, method, Base+path, body, true)
 	var se StatusError
 	if errors.As(err, &se) && se.Code == http.StatusUnauthorized {
@@ -202,6 +206,12 @@ func (c *Client) Login(ctx context.Context, email, password string) (Token, erro
 		b, err = c.do(ctx, http.MethodPost, Base+"/user/login", body, false) // the older sign-in
 	}
 	if errors.As(err, &se) && (se.Code == http.StatusUnauthorized || se.Code == http.StatusBadRequest || se.Code == http.StatusForbidden) {
+		var e struct {
+			Message string `json:"errorMessage"`
+		}
+		if json.Unmarshal(b, &e) == nil && strings.TrimSpace(e.Message) != "" { // Pocket Casts' own words
+			return Token{}, fmt.Errorf("%w: Pocket Casts says %q", ErrWrong, strings.TrimSpace(e.Message))
+		}
 		return Token{}, ErrWrong
 	}
 	if err != nil {
@@ -518,8 +528,17 @@ func (c *Client) Files(ctx context.Context) ([]File, error) {
 	var r struct {
 		Files []File `json:"files"`
 	}
-	err := c.call(ctx, http.MethodGet, "/files?include_bookmarks=true", nil, &r)
+	err := plus(c.call(ctx, http.MethodGet, "/files?include_bookmarks=true", nil, &r))
 	return r.Files, err
+}
+
+// plus is a Files call's error: refused with a session that works for the rest, the account has no
+// Plus (the session itself is checked by every other call).
+func plus(err error) error {
+	if errors.Is(err, ErrSignIn) {
+		return ErrPlus
+	}
+	return err
 }
 
 // FileURL is where a file downloads from (a signed address, good for a while).
@@ -527,7 +546,7 @@ func (c *Client) FileURL(ctx context.Context, uuid string) (string, error) {
 	var r struct {
 		URL string `json:"url"`
 	}
-	err := c.call(ctx, http.MethodGet, "/files/play/"+url.PathEscape(uuid), nil, &r)
+	err := plus(c.call(ctx, http.MethodGet, "/files/play/"+url.PathEscape(uuid), nil, &r))
 	if err == nil && r.URL == "" {
 		err = errors.New("Pocket Casts has no address for that file")
 	}
@@ -536,13 +555,13 @@ func (c *Client) FileURL(ctx context.Context, uuid string) (string, error) {
 
 // SetFilePlace saves where the user is in a file, and whether it is played.
 func (c *Client) SetFilePlace(ctx context.Context, uuid string, sec, status int) error {
-	return c.call(ctx, http.MethodPost, "/files", map[string]any{"files": []map[string]any{{"uuid": uuid,
-		"playedUpTo": max(sec, 0), "playingStatus": status}}}, nil)
+	return plus(c.call(ctx, http.MethodPost, "/files", map[string]any{"files": []map[string]any{{"uuid": uuid,
+		"playedUpTo": max(sec, 0), "playingStatus": status}}}, nil))
 }
 
 // DeleteFile deletes an uploaded file from Pocket Casts.
 func (c *Client) DeleteFile(ctx context.Context, uuid string) error {
-	return c.call(ctx, http.MethodDelete, "/files/"+url.PathEscape(uuid), nil, nil)
+	return plus(c.call(ctx, http.MethodDelete, "/files/"+url.PathEscape(uuid), nil, nil))
 }
 
 // CacheEpisode is an episode as the public cache has it.
@@ -569,30 +588,49 @@ type Show struct {
 	Episodes    []CacheEpisode `json:"episodes"`
 }
 
-// Full is a podcast and all its episodes, from the public cache (no sign-in). etag: the last
-// fetch's, to ask only for a change; unchanged true when there is none.
+// Full is a podcast and all its episodes, from the public cache (no sign-in). The cache answers
+// with the address of the podcast's current version; that address is its tag, so a version already
+// had (etag, the last fetch's) isn't fetched again: unchanged true.
 func (c *Client) Full(ctx context.Context, uuid, etag string) (show *Show, tag string, unchanged bool, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, Cache+"/podcast/full/"+url.PathEscape(uuid), nil)
+	get := func(u string, follow bool) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", c.Agent)
+		hc := c.HTTP
+		if !follow {
+			cp := *c.HTTP
+			cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			hc = &cp
+		}
+		return hc.Do(req)
+	}
+	resp, err := get(Cache+"/podcast/full/"+url.PathEscape(uuid), false)
 	if err != nil {
 		return nil, "", false, err
 	}
-	req.Header.Set("User-Agent", c.Agent)
-	if etag != "" {
-		req.Header.Set("If-None-Match", etag)
-	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, "", false, err
+	if loc := resp.Header.Get("Location"); resp.StatusCode/100 == 3 && loc != "" {
+		resp.Body.Close()
+		next, err := resp.Request.URL.Parse(loc)
+		if err != nil {
+			return nil, "", false, err
+		}
+		tag = next.String()
+		if tag == etag {
+			return nil, tag, true, nil
+		}
+		if resp, err = get(tag, true); err != nil {
+			return nil, "", false, err
+		}
+	} else if et := resp.Header.Get("ETag"); et != "" {
+		tag = et
+		if et == etag {
+			resp.Body.Close()
+			return nil, tag, true, nil
+		}
 	}
 	defer resp.Body.Close()
-	// the cache answers with the current version's address; that address is the version's tag
-	tag = resp.Request.URL.String()
-	if et := resp.Header.Get("ETag"); et != "" {
-		tag = et
-	}
-	if resp.StatusCode == http.StatusNotModified || etag != "" && tag == etag {
-		return nil, tag, true, nil
-	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", false, StatusError{resp.StatusCode}
 	}
@@ -600,11 +638,10 @@ func (c *Client) Full(ctx context.Context, uuid, etag string) (show *Show, tag s
 	if err != nil {
 		return nil, "", false, err
 	}
-	b = gunzip(b)
 	var out struct {
 		Podcast Show `json:"podcast"`
 	}
-	if err := json.Unmarshal(b, &out); err != nil {
+	if err := json.Unmarshal(gunzip(b), &out); err != nil {
 		return nil, "", false, errors.New("Pocket Casts' copy of the podcast is broken")
 	}
 	return &out.Podcast, tag, false, nil

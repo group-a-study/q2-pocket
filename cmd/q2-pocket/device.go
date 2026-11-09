@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/directory"
 	"q2-pocket/internal/library"
 	"q2-pocket/internal/q2"
@@ -129,33 +130,46 @@ func pct(done, total int64) string {
 	return fmt.Sprintf("%d%% of %s", done*100/total, size(total))
 }
 
-// episodeRow is an episode: on the card it plays; otherwise a press downloads it, or cancels its
-// download, or tries a failed one again.
-// episodeRow is an episode's row; at: how far in Q2 Pod's place in it is, in seconds (0: none).
-func episodeRow(e library.EpisodeInfo, withShow bool, at int) q2spot.Row {
+// episodeRow is an episode's row: on the card it plays (its subtitle saying what was cut from it);
+// otherwise a press downloads it, or cancels its download, or tries a failed one again. at: how far
+// in Q2 Pod's place in it is, in seconds (0: none); dir: the app's folder, which has the reports.
+func episodeRow(e library.EpisodeInfo, withShow bool, at int, dir string) q2spot.Row {
 	show := ""
 	if withShow {
 		show = e.Show
 	}
 	when := join(show, day(e.Date), length(e.Duration))
 	id := e.Key + ":" + e.EID
+	cut := "" // what was cut from it, when something was
+	if r := clean.Load(dir, e.Key, e.EID); e.OnCard && r != nil {
+		if ads, sp, _ := r.Removed(); ads+sp > 0 {
+			cut = r.Summary()
+		}
+	}
 	switch {
 	case e.OnCard && at > 0: // part played: Q2 Pod resumes it there
 		left := "Played " + length(at)
-		if e.Duration > at {
+		if d := clean.Load(dir, e.Key, e.EID); d != nil && d.Length > 0 {
+			_, _, sec := d.Removed()
+			if rest := int(d.Length-sec) - at; rest > 0 {
+				left = length(rest) + " left"
+			}
+		} else if e.Duration > at {
 			left = length(e.Duration-at) + " left"
 		}
 		return q2spot.Row{Kind: "local", URI: e.Path, Context: "album", Title: e.Title,
-			Subtitle: join(show, day(e.Date), left), Position: "del:" + id}
+			Subtitle: join(show, day(e.Date), left, cut), Position: "del:" + id}
 	case e.OnCard:
 		return q2spot.Row{Kind: "local", URI: e.Path, Context: "album", Title: e.Title,
-			Subtitle: join(when, "Downloaded"), Position: "del:" + id}
+			Subtitle: join(when, cmpOr(cut, "Downloaded")), Position: "del:" + id}
 	case e.Job == nil:
 		dl := "Download"
 		if e.Length > 0 {
 			dl += " (" + size(e.Length) + ")"
 		}
 		return act("get", id, e.Title, join(when, dl))
+	case e.Job.State == library.Active && e.Job.Note != "":
+		return act("cancel", id, e.Title, join(show, e.Job.Note+"…"))
 	case e.Job.State == library.Active:
 		return act("cancel", id, e.Title, join(show, "Downloading "+pct(e.Job.Done, e.Job.Size)))
 	case e.Job.State == library.Failed:
@@ -176,17 +190,23 @@ func cursor(req q2spot.Request, skip int) int {
 	return max(n, 0)
 }
 
-// page is eps[off:] up to pageSize as rows, and the cursor for More….
-func (a *app) page(eps []library.EpisodeInfo, off int, withShow bool) ([]q2spot.Row, string) {
+// page is eps[off:] up to pageSize as rows, and the cursor for More…. upNext: Play/Pause held adds
+// an episode Pocket Casts knows to Up Next (signed in); else it deletes one on the card.
+func (a *app) page(eps []library.EpisodeInfo, off int, withShow, upNext bool) ([]q2spot.Row, string) {
 	var rows []q2spot.Row
 	places := a.places()
+	upNext = upNext && a.pc.SignedIn()
 	end := min(off+pageSize, len(eps))
 	for i := off; i < end; i++ {
 		at := 0
 		if eps[i].OnCard {
 			at = places[placeKey(eps[i].Path)]
 		}
-		rows = append(rows, episodeRow(eps[i], withShow, at))
+		r := episodeRow(eps[i], withShow, at, a.opts.dir)
+		if upNext && eps[i].PC != "" && eps[i].Feed.PC != "" {
+			r.Position = "upq:" + eps[i].PC + ":" + eps[i].Feed.PC
+		}
+		rows = append(rows, r)
 	}
 	if end < len(eps) {
 		return rows, strconv.Itoa(end)
@@ -246,12 +266,47 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		}
 		return ok("Deleted")
 	}
+	if id, ok := strings.CutPrefix(req.Op, "upq:"); ok { // Play/Pause held: into Up Next
+		return a.upNextAdd(id)
+	}
+	if id, ok := strings.CutPrefix(req.Op, "unq:"); ok { // held twice in Up Next: out of it
+		return a.upNextRemove(id)
+	}
 	switch req.Op {
+	case "upnext":
+		return a.upNextPage(cursor(req, 0))
+	case "inprog", "new", "starred", "history":
+		return a.listPage(req.Op, cursor(req, 0))
+	case "discover":
+		return a.discover()
+	case "dlist":
+		return a.dlist(key)
+	case "dshow":
+		return a.dshow(key, cursor(req, 1))
+	case "dsub":
+		return a.dsub(key)
+	case "adfree":
+		return a.adfreePage()
+	case "set":
+		return a.setOption(key)
+	case "sync":
+		if !a.pc.SignedIn() {
+			return q2spot.Fail(q2spot.Login, "Sign in to Pocket Casts on the phone page first")
+		}
+		a.sy.kick()
+		return ok("Syncing with Pocket Casts")
+	case "files":
+		return a.filesPage()
+	case "fget":
+		return ok(a.fileGet(key))
+	case "pcget":
+		return a.pcGet(key)
 	case "caps":
 		var rows []q2spot.Row
 		for _, op := range []string{"menu", "shows", "show", "opts", "latest", "downloaded", "downloads", "search",
 			"preview", "get", "cancel", "del", "sub", "refresh", "refresh1", "auto", "getlatest", "wipe", "unsub",
-			"retryall", "cancelall", "stop", "sleep", "setsleep"} {
+			"retryall", "cancelall", "stop", "sleep", "setsleep", "upnext", "inprog", "new", "starred", "history",
+			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "unq"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}
 		return q2spot.Reply{Message: version, Rows: rows}
@@ -272,14 +327,14 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		if len(eps) == 0 {
 			return live([]q2spot.Row{info("No episodes yet", "Subscribe to a show first")}, "", a.lib.Refreshing() > 0)
 		}
-		rows, next := a.page(eps, cursor(req, 0), true)
+		rows, next := a.page(eps, cursor(req, 0), true, true)
 		return live(rows, next, moving(eps) || a.lib.Refreshing() > 0)
 	case "downloaded":
 		eps, _ := a.lib.Downloaded()
 		if len(eps) == 0 {
 			return q2spot.Reply{Rows: []q2spot.Row{info("Nothing downloaded", "Press an episode to download it")}}
 		}
-		rows, next := a.page(eps, cursor(req, 0), true)
+		rows, next := a.page(eps, cursor(req, 0), true, false)
 		return q2spot.Reply{Rows: rows, Cursor: next}
 	case "downloads":
 		return a.downloads()
@@ -321,7 +376,7 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		if si.Auto {
 			return ok("New episodes won't download by themselves")
 		}
-		return ok("New episodes will download when Podcasts updates")
+		return ok("New episodes will download when Pocket updates")
 	case "getlatest":
 		eps, err := a.lib.Episodes(key)
 		if err != nil || len(eps) == 0 {
@@ -345,6 +400,14 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		if !a.confirm("unsub:" + key) {
 			return ok("Press again to unsubscribe")
 		}
+		if si, found := a.lib.Show(key); found && si.PC != "" && a.pc.SignedIn() {
+			ctx, cancel := context.WithTimeout(a.ctx, 12*time.Second)
+			err := a.pc.Unsubscribe(ctx, si.PC)
+			cancel()
+			if err != nil {
+				return q2spot.Fail(q2spot.Offline, "Couldn't unsubscribe in Pocket Casts: "+say(err))
+			}
+		}
 		if err := a.lib.Unsubscribe(key); err != nil {
 			return q2spot.Fail(q2spot.Error, say(err))
 		}
@@ -355,25 +418,38 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		return ok("Cancelled " + plural(a.lib.DL.CancelAll(), "download"))
 	case "stop":
 		go func() { time.Sleep(300 * time.Millisecond); a.shutdown() }() // the reply first
-		return ok("Podcasts off")
+		return ok("Pocket off")
 	}
-	return q2spot.Fail(q2spot.Unsupported, "Update Podcasts on the card")
+	return q2spot.Fail(q2spot.Unsupported, "Update Pocket on the card")
 }
 
 func (a *app) menu() q2spot.Reply {
 	shows := a.lib.Shows()
 	jobs := a.lib.DL.Jobs()
 	busy := a.lib.Refreshing()
+	in := a.pc.SignedIn()
 	var rows []q2spot.Row
+	_, _, syncing := a.sy.status()
+	if in {
+		up, _ := a.sy.upNext()
+		sub := "Your queue"
+		if len(up) > 0 {
+			sub = join(plural(len(up), "episode"), "Next: "+up[0].Title)
+		}
+		rows = append(rows, list("upnext", "", "Up Next", sub), list("inprog", "", "In Progress", ""),
+			list("new", "", "New Releases", ""), list("starred", "", "Starred", ""))
+	}
 	if len(shows) > 0 {
 		sub := ""
 		if latest := a.lib.Latest(1); len(latest) > 0 {
 			sub = join(latest[0].Show, day(latest[0].Date))
 		}
-		rows = append(rows, list("latest", "", "New Episodes", sub))
-		rows = append(rows, list("shows", "", "Shows", plural(len(shows), "show")))
+		if !in {
+			rows = append(rows, list("latest", "", "New Episodes", sub))
+		}
+		rows = append(rows, list("shows", "", "Podcasts", plural(len(shows), "show")))
 	} else {
-		rows = append(rows, list("shows", "", "Shows", "None yet: search, or add from your phone"))
+		rows = append(rows, list("shows", "", "Podcasts", "None yet: search, or add from your phone"))
 	}
 	if eps, bytes := a.lib.Downloaded(); len(eps) > 0 {
 		rows = append(rows, list("downloaded", "", "Downloaded", join(plural(len(eps), "episode"), size(bytes))))
@@ -381,23 +457,41 @@ func (a *app) menu() q2spot.Reply {
 	if len(jobs) > 0 {
 		rows = append(rows, list("downloads", "", "Downloads", jobsSummary(jobs)))
 	}
+	if in {
+		rows = append(rows, list("files", "", "Files", "Uploaded to Pocket Casts"), list("history", "", "History", "Listened to lately"))
+	}
+	rows = append(rows, list("discover", "", "Discover", "Trending, popular and featured"))
 	sleepSub, sleeping := a.sleepLine()
 	if q2.HasCap("sleep") { // Q2 Pod keeps the timer only when it has it
 		rows = append(rows, list("sleep", "", "Sleep Timer", sleepSub))
 	}
-	retagging := a.lib.Retagging()
-	if retagging {
+	if a.lib.Retagging() {
 		rows = append(rows, info("Adding Titles and Covers…", "To episodes already on the Q2"))
 	}
 	rows = append(rows, q2spot.Row{Kind: "search", Title: "Search Podcasts", Subtitle: "By name, or type a feed's address"})
-	phone := q2spot.Row{Kind: "remote", Title: "Add from Your Phone",
-		Subtitle: "http://" + a.addr() + " · PIN " + spaced(a.settings().PIN)}
+	s := a.settings()
+	_, ads, sp, sec, _ := a.cutSoFar()
+	adSub := "Off"
+	if s.Ads || s.Sponsors {
+		adSub = "On"
+		if ads+sp > 0 {
+			adSub = join("On", plural(ads+sp, "cut"), length(int(sec)))
+		}
+	}
+	rows = append(rows, list("adfree", "", "Ads & Sponsors", adSub))
+	if in {
+		rows = append(rows, a.syncRow())
+	}
+	phone := q2spot.Row{Kind: "remote", Title: "Phone Page", Subtitle: "http://" + a.addr() + " · PIN " + spaced(s.PIN)}
+	if !in {
+		phone.Title, phone.Subtitle = "Sign In to Pocket Casts", "On your phone: "+a.addr()+" · PIN "+spaced(s.PIN)
+	}
 	if a.addr() == "" {
 		phone.Subtitle = "Connect the Q2 to Wi-Fi first"
 	}
 	rows = append(rows, phone)
 	if len(shows) > 0 {
-		sub := "Updates every hour while Podcasts is on"
+		sub := "Updates every hour while Pocket is on"
 		if busy > 0 {
 			sub = "Updating " + plural(busy, "show") + "…"
 		} else if oldest := oldestCheck(shows); !oldest.IsZero() {
@@ -406,11 +500,11 @@ func (a *app) menu() q2spot.Reply {
 		rows = append(rows, act("refresh", "", "Refresh All", sub))
 	}
 	idle := "It stays on until you turn it off"
-	if m := a.settings().IdleMinutes; m > 0 {
+	if m := s.IdleMinutes; m > 0 {
 		idle = fmt.Sprintf("It also turns off after %d minutes unused", m)
 	}
-	rows = append(rows, act("stop", "", "Turn Off Podcasts", idle))
-	return live(rows, "", busy > 0 || len(jobs) > 0 || retagging || sleeping)
+	rows = append(rows, act("stop", "", "Turn Off Pocket", idle))
+	return live(rows, "", busy > 0 || len(jobs) > 0 || a.lib.Retagging() || sleeping || syncing)
 }
 
 func oldestCheck(shows []library.ShowInfo) time.Time {
@@ -515,7 +609,7 @@ func (a *app) show(key string, off int) q2spot.Reply {
 			rows = append(rows, info("No episodes", "The feed has no audio episodes"))
 		}
 	}
-	more, next := a.page(eps, off, false)
+	more, next := a.page(eps, off, false, true)
 	return live(append(rows, more...), next, si.Refreshing || moving(eps))
 }
 
@@ -733,5 +827,14 @@ func (a *app) subscribe(key string) q2spot.Reply {
 		return q2spot.Fail(q2spot.Error, say(err))
 	}
 	si := a.lib.Adopt(r)
+	if a.pc.SignedIn() { // in Pocket Casts too, the show then Pocket Casts' own
+		go func() {
+			ctx, cancel := context.WithTimeout(a.ctx, time.Minute)
+			defer cancel()
+			if uuid, err := a.pc.Resolve(ctx, si.URL); err == nil && uuid != "" && a.pc.Subscribe(ctx, uuid) == nil {
+				a.lib.SetPC(si.Key, uuid)
+			}
+		}()
+	}
 	return q2spot.Reply{Message: "Subscribed to " + si.Title}
 }

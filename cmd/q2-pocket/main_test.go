@@ -60,7 +60,7 @@ func startApp(t *testing.T) (*app, string) {
 	t.Cleanup(func() { os.RemoveAll(socks) })
 	q2.CapsFile = filepath.Join(socks, "caps") // newer Q2 Pod's: the sleep feature offered
 	os.WriteFile(q2.CapsFile, []byte("playlist progress pages library sleep\n"), 0o644)
-	o := options{dir: filepath.Join(card, ".podcasts"), card: card, statusFile: filepath.Join(socks, "state"),
+	o := options{dir: filepath.Join(card, ".pocket"), card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"), upnext: filepath.Join(socks, "upnext"),
 		browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"), port: 18100,
 		resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: func() bool { return true }}
 	a, err := start(o)
@@ -185,13 +185,13 @@ func TestQ2Page(t *testing.T) {
 	a, card := startApp(t)
 
 	menu := spot(t, a, "menu")
-	if strings.Join(titles(menu), "|") != "Shows|Sleep Timer|Search Podcasts|Add from Your Phone|Turn Off Podcasts" {
+	if strings.Join(titles(menu), "|") != "Podcasts|Discover|Sleep Timer|Search Podcasts|Ads & Sponsors|Sign In to Pocket Casts|Turn Off Pocket" {
 		t.Fatalf("empty menu %q", titles(menu))
 	}
 	if row := findRow(t, menu, "Search Podcasts"); row[0] != "search" {
 		t.Errorf("search row %q", row)
 	}
-	if row := findRow(t, menu, "Add from Your Phone"); row[0] != "remote" {
+	if row := findRow(t, menu, "Sign In to Pocket Casts"); row[0] != "remote" {
 		t.Errorf("remote row %q", row)
 	}
 
@@ -368,7 +368,7 @@ func TestPhonePage(t *testing.T) {
 	if imp["added"] != 1 || imp["found"] != 2 {
 		t.Fatalf("import %v", imp)
 	}
-	if b, _ := os.ReadFile(filepath.Join(card, ".podcasts", "subscriptions.opml")); !bytes.Contains(b, []byte("other.example")) {
+	if b, _ := os.ReadFile(filepath.Join(card, ".pocket", "subscriptions.opml")); !bytes.Contains(b, []byte("other.example")) {
 		t.Fatalf("saved %s", b)
 	}
 	// The QR code signs in by its key, once.
@@ -386,7 +386,7 @@ func TestCardImportAndState(t *testing.T) {
 		[]byte(`<opml><body><outline text="A" xmlUrl="https://a.example/rss"/></body></opml>`), 0o644)
 	socks, _ := os.MkdirTemp("/tmp", "q2p")
 	defer os.RemoveAll(socks)
-	a, err := start(options{dir: filepath.Join(card, ".podcasts"), card: card, statusFile: filepath.Join(socks, "state"),
+	a, err := start(options{dir: filepath.Join(card, ".pocket"), card: card, statusFile: filepath.Join(socks, "state"),
 		browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"), port: 18200})
 	if err != nil {
 		t.Fatal(err)

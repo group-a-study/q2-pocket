@@ -9,7 +9,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -22,15 +21,17 @@ import (
 	"syscall"
 	"time"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/feed"
 	"q2-pocket/internal/library"
+	"q2-pocket/internal/pocketcasts"
 	"q2-pocket/internal/q2"
 	"q2-pocket/internal/q2spot"
 	"q2-pocket/internal/qr"
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.6"
+const version = "q2-v1.0"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -38,17 +39,11 @@ const (
 	webHold      = 5 * time.Minute  // the phone's page used this recently keeps the Q2 awake
 )
 
-// settings is .podcasts/config.json.
-type settings struct {
-	Key         string `json:"web_key"`      // the QR code's: signs a browser in
-	PIN         string `json:"pin"`          // the Q2's screen's, typed with the address
-	IdleMinutes int    `json:"idle_minutes"` // stop by itself after this long unused (0: never)
-}
-
 type options struct {
 	dir, card, statusFile, browse, control string
 	resume                                 string // Q2 Pod's places in what it played (resume.go)
 	sleep                                  string // the Sleep Timer's request to Q2 Pod (sleep.go)
+	places, upnext                         string // places for Q2 Pod's resume ring, and Up Next's songs (sync.go)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
 }
@@ -56,8 +51,11 @@ type options struct {
 type app struct {
 	opts   options
 	lib    *library.Library
+	pc     *pocketcasts.Client
+	sy     *syncer
 	state  *q2.State
 	client *http.Client // the directory's searches
+	web    *http.Client // uploaded files' downloads
 	port   int
 	ln     net.Listener
 	ctx    context.Context // background work, ended by shutdown
@@ -77,6 +75,12 @@ type app struct {
 	placeMap map[uint32]int       // Q2 Pod's resume ring as last read (places), and its file's time
 	placesAt time.Time
 	sleepSet int // the Sleep Timer's minutes as last chosen, for its page's Selected
+
+	pending  sync.Mutex          // the pages' own: getting, lists, fileJobs
+	getting  map[string]bool     // Pocket Casts episodes whose show is being added to download them
+	lists    map[string]cached   // Discover's lists, by name
+	fileJobs map[string]*fileJob // uploaded files downloading
+	fileMu   sync.Mutex          // one file at a time
 	quit     chan struct{}
 	once     sync.Once
 }
@@ -88,6 +92,8 @@ func main() {
 	flag.StringVar(&o.statusFile, "status-file", "/tmp/q2-pocket.state", "the status file Q2 Pod reads")
 	flag.StringVar(&o.resume, "resume-file", "/mnt/data/ringnav-resume", "Q2 Pod's places in what it played")
 	flag.StringVar(&o.sleep, "sleep-file", "/tmp/q2-pocket.sleep", "the Sleep Timer's request to Q2 Pod")
+	flag.StringVar(&o.places, "places-file", "/tmp/q2-pocket.places", "places for Q2 Pod's resume ring")
+	flag.StringVar(&o.upnext, "upnext-file", "/tmp/q2-pocket.upnext", "Up Next's songs, for Q2 Pod to play in order")
 	flag.StringVar(&o.browse, "browse-socket", "/tmp/q2-pocket.browse.sock", "Q2SPOT/1 for the Q2's page")
 	flag.StringVar(&o.control, "control-socket", "/tmp/q2-pocket.sock", "datagrams: q quits")
 	flag.IntVar(&o.port, "port", 8100, "the phone page's port (the next free one if taken)")
@@ -105,36 +111,6 @@ func main() {
 	go func() { <-sig; a.shutdown() }()
 	a.run()
 	os.Exit(0)
-}
-
-// loadSettings reads config.json, making the key and PIN the first time; they stay, so a phone
-// signed in once stays signed in.
-func loadSettings(dir string) settings {
-	s := settings{IdleMinutes: 15}
-	if b, err := os.ReadFile(filepath.Join(dir, "config.json")); err == nil {
-		json.Unmarshal(b, &s)
-	}
-	dirty := false
-	if len(s.Key) < 12 {
-		s.Key, dirty = q2.Key(12), true
-	}
-	if len(s.PIN) != 6 {
-		s.PIN, dirty = q2.PIN(6), true
-	}
-	if s.IdleMinutes < 0 {
-		s.IdleMinutes = 0
-	}
-	if dirty {
-		b, _ := json.MarshalIndent(s, "", "  ")
-		q2.WriteFile(filepath.Join(dir, "config.json"), b)
-	}
-	return s
-}
-
-func (a *app) settings() settings {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.set
 }
 
 // touch notes a use: web is the phone's (which holds standby off a while).
@@ -180,6 +156,13 @@ func start(o options) (*app, error) {
 	}
 	feeds := tlsroots.Transport()
 	agent := "Q2Pocket/" + version[len("q2-v"):] + " (Shanling Q2; Q2 Pod card app)" // hosts count listens by it
+	set := loadSettings(o.dir)
+	pc := pocketcasts.New(&http.Client{Transport: feeds, Timeout: 60 * time.Second}, agent, loadAccount(o.dir))
+	pc.Saved = func(t pocketcasts.Token) { saveAccount(o.dir, t) }
+	var a *app
+	cl := &clean.Cleaner{Dir: o.dir, Fetch: &http.Client{Transport: tlsroots.Transport(), Timeout: 30 * time.Minute},
+		API: &http.Client{Transport: feeds, Timeout: 60 * time.Second}, Agent: agent, PC: pc,
+		Settings: func() clean.Settings { return a.cleanSettings() }}
 	lib, err := library.Open(library.Options{
 		Dir:    o.dir,
 		Root:   filepath.Join(o.card, "Podcasts"),
@@ -187,6 +170,8 @@ func start(o options) (*app, error) {
 		Fetch:  &http.Client{Transport: tlsroots.Transport()},
 		Agent:  agent,
 		Ready:  o.ready,
+		PC:     pc,
+		Clean:  cl,
 	})
 	if err != nil {
 		return nil, err
@@ -194,11 +179,12 @@ func start(o options) (*app, error) {
 	importCard(lib, o.card)
 	ctx, cancel := context.WithCancel(context.Background())
 	// Turned on counts as used: the Q2 stays awake while the phone scans the code.
-	a := &app{opts: o, lib: lib, state: &q2.State{Path: o.statusFile}, ctx: ctx, cancel: cancel,
+	a = &app{opts: o, lib: lib, pc: pc, set: set, state: &q2.State{Path: o.statusFile}, ctx: ctx, cancel: cancel,
 		client: &http.Client{Transport: feeds, Timeout: 10 * time.Second}, used: time.Now(),
+		web:   &http.Client{Transport: tlsroots.Transport()},
 		armed: map[string]time.Time{}, found: map[string]string{}, loads: map[string]*load{},
 		quit: make(chan struct{})}
-	a.set = loadSettings(o.dir)
+	a.sy = newSyncer(a)
 	if a.ln, a.port = listen(o.port); a.ln == nil {
 		return nil, fmt.Errorf("no port for the phone's page from %d", o.port)
 	}
@@ -211,6 +197,7 @@ func start(o options) (*app, error) {
 		}
 	})
 	lib.DL.Start()
+	go a.sy.run(ctx)
 	go func() {
 		lib.Retag(ctx) // episodes an older version left untagged, with the art the feeds had
 		for first := true; ; first = false {
@@ -248,6 +235,9 @@ func (a *app) run() {
 		case <-t.C:
 			a.writeState()
 			s := a.settings()
+			if a.sy.listening() { // a podcast playing: its place is synced, so stay
+				a.touch(false)
+			}
 			a.mu.Lock()
 			idle := time.Since(a.used)
 			a.mu.Unlock()
@@ -256,6 +246,14 @@ func (a *app) run() {
 			}
 		}
 	}
+}
+
+// online is whether the Q2 has Wi-Fi (tests say).
+func (a *app) online() bool {
+	if a.opts.ready != nil {
+		return a.opts.ready()
+	}
+	return q2.LocalIP() != ""
 }
 
 // working is whether something runs that standby would break: a feed being fetched, or a download

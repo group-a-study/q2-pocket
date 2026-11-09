@@ -2,7 +2,13 @@ package main
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"q2-pocket/internal/q2"
 )
 
 // Q2 Pod keeps its place in each podcast it plays (navigation.c's resume ring, /mnt/data/ringnav-resume):
@@ -45,4 +51,49 @@ func (a *app) places() map[uint32]int {
 	}
 	a.placesAt, a.placeMap = st.ModTime(), m
 	return m
+}
+
+// recentPlace is the key of the place Q2 Pod saved last (the ring's first), 0 when there is none,
+// and when the ring was last written.
+func (a *app) recentPlace() (uint32, time.Time) {
+	st, err := os.Stat(a.opts.resume)
+	if err != nil {
+		return 0, time.Time{}
+	}
+	f, err := os.Open(a.opts.resume)
+	if err != nil {
+		return 0, st.ModTime()
+	}
+	defer f.Close()
+	var b [8]byte
+	if _, err := f.ReadAt(b[:], 0); err != nil || int32(binary.LittleEndian.Uint32(b[4:])) <= 0 {
+		return 0, st.ModTime()
+	}
+	return binary.LittleEndian.Uint32(b[:]), st.ModTime()
+}
+
+// setPlaces asks Q2 Pod to keep these places (seconds by song path; 0 forgets one) in its resume
+// ring, so a song starts there: a file Q2 Pod reads and removes (addon.c), merged with one it hasn't
+// read yet. false when the running Q2 Pod can't (it lists no "places" in its caps).
+func (a *app) setPlaces(m map[string]int) bool {
+	if !q2.HasCap("places") || len(m) == 0 {
+		return false
+	}
+	all := map[string]int{}
+	if b, err := os.ReadFile(a.opts.places); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			sec, path, ok := strings.Cut(line, "\t")
+			if n, err := strconv.Atoi(sec); ok && err == nil && path != "" {
+				all[path] = n
+			}
+		}
+	}
+	for p, n := range m {
+		all[p] = max(n, 0)
+	}
+	var b strings.Builder
+	for p, n := range all {
+		fmt.Fprintf(&b, "%d\t%s\n", n, p)
+	}
+	return q2.WriteFile(a.opts.places, []byte(b.String())) == nil
 }
