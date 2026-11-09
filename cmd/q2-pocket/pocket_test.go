@@ -114,7 +114,7 @@ func newPC(t *testing.T) (*pcFake, *httptest.Server) {
 }
 
 // startSigned is startApp signed in to the fake Pocket Casts, with a Q2 Pod that takes places and
-// plays lists.
+// plays playlists.
 func startSigned(t *testing.T) (*app, string, *pcFake) {
 	f, _ := newPC(t)
 	card := t.TempDir()
@@ -124,13 +124,13 @@ func startSigned(t *testing.T) (*app, string, *pcFake) {
 	}
 	t.Cleanup(func() { os.RemoveAll(socks) })
 	q2.CapsFile = filepath.Join(socks, "caps")
-	os.WriteFile(q2.CapsFile, []byte("playlist progress pages library sleep places lists\n"), 0o644)
+	os.WriteFile(q2.CapsFile, []byte("playlist progress pages library sleep places\n"), 0o644)
 	dir := filepath.Join(card, ".pocket")
 	os.MkdirAll(dir, 0o755)
 	saveAccount(dir, pocketcasts.Token{Access: "tok", Email: "a@b.c"})
 	// a sync each time the test asks, not on the loop's clock
 	o := options{dir: dir, card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"),
-		upnext: filepath.Join(socks, "upnext"), browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"),
+		play: filepath.Join(socks, "play"), browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"),
 		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: func() bool { return true }}
 	a, err := start(o)
 	if err != nil {
@@ -191,9 +191,6 @@ func TestSync(t *testing.T) {
 	if e3, _ := a.lib.PCEpisode(podA, epA3); e3.OnCard || e3.Job != nil {
 		t.Error("an episode not in Up Next downloaded")
 	}
-	if b, _ := os.ReadFile(a.opts.upnext); string(b) != e2.Path+"\n"+e1.Path+"\n" {
-		t.Errorf("Up Next's songs: %q", b)
-	}
 
 	// Played on the Q2: its place sent, and it becomes Up Next's current, and the history's
 	ring(t, card, e2.Path, 7)
@@ -240,8 +237,19 @@ func TestSync(t *testing.T) {
 
 	// the pages
 	up := spot(t, a, "upnext")
-	if len(up.rows) != 2 || up.rows[0][0] != "local" || up.rows[0][4] != "list:"+a.opts.upnext || up.rows[0][5] != "unq:"+podA+":"+epA2 {
+	if len(up.rows) != 2 || up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[1][4] != "1" || up.rows[0][5] != "unq:"+podA+":"+epA2 {
 		t.Errorf("Up Next page: %v", up.rows)
+	}
+	// pressed: Up Next from there, an .m3u on the card for Q2 Pod to play in order
+	if r := spot(t, a, "upplay", "0"); r.message != "Playing Up Next" {
+		t.Errorf("upplay: %+v", r)
+	}
+	m3u := filepath.Join(a.opts.dir, "upnext.m3u")
+	if b, _ := os.ReadFile(m3u); string(b) != "#EXTM3U\n"+e2.Path+"\n"+e1.Path+"\n" {
+		t.Errorf("the playlist: %q", b)
+	}
+	if b, _ := os.ReadFile(a.opts.play); !strings.HasSuffix(string(b), " "+m3u+"\n") {
+		t.Errorf(".play: %q", b)
 	}
 	if r := spot(t, a, "upq:"+podA+":"+epA1); r.message != "It's in Up Next already" {
 		t.Errorf("add again: %+v", r)

@@ -26,7 +26,7 @@ import (
 //
 // Ops: upnext, inprog, new, starred, history [cursor]; discover; dlist <name>; dshow <uuid>;
 // adfree; files. Actions: pcget <podcast:uuid>; upq:<podcast>:<uuid> (held); unq:<podcast>:<uuid>
-// (held twice); dsub <uuid>; set <name>; sync; fget <uuid>.
+// (held twice); upplay <index>; dsub <uuid>; set <name>; sync; fget <uuid>.
 
 var listNames = map[string]string{"inprog": "In Progress", "new": "New Releases", "starred": "Starred", "history": "History"}
 
@@ -97,18 +97,56 @@ func (a *app) upNextPage(off int) q2spot.Reply {
 	if len(up) == 0 {
 		return q2spot.Reply{Rows: []q2spot.Row{info("Up Next is empty", "Hold Play/Pause on an episode to add it")}}
 	}
-	ctx := "album"
-	if q2.HasCap("lists") { // Q2 Pod plays on through Up Next's downloaded episodes, in order
-		ctx = "list:" + a.opts.upnext
-	}
 	var eps []pocketcasts.Episode
 	for _, e := range up {
 		if e.Show() != pocketcasts.FilesPodcast {
 			eps = append(eps, e)
 		}
 	}
-	rows, next := a.pcPage(eps, off, func(e pocketcasts.Episode) string { return "unq:" + pcID(e) }, ctx)
+	rows, next := a.pcPage(eps, off, func(e pocketcasts.Episode) string { return "unq:" + pcID(e) }, "album")
+	if q2.HasCap("playlist") { // a press plays on through Up Next, in order (upPlay)
+		for i := range rows {
+			if rows[i].Kind == "local" {
+				rows[i].Kind, rows[i].URI, rows[i].Context = "action", "upplay", strconv.Itoa(off+i)
+			}
+		}
+	}
 	return live(rows, next, a.anyMoving(eps))
+}
+
+// upPlay plays Up Next from its episode at i on, in order, as Q2 Pod plays an app's playlist
+// (addon.c stream_poll): an .m3u on the card of those downloaded or downloading, each waited for
+// until it is there, named in /tmp/q2-pocket.play.
+func (a *app) upPlay(arg string) q2spot.Reply {
+	i, err := strconv.Atoi(arg)
+	up, _ := a.sy.upNext()
+	var eps []pocketcasts.Episode
+	for _, e := range up {
+		if e.Show() != pocketcasts.FilesPodcast {
+			eps = append(eps, e)
+		}
+	}
+	if err != nil || i < 0 || i >= len(eps) {
+		return q2spot.Fail(q2spot.Unavailable, "Up Next has changed: look again")
+	}
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+	n := 0
+	for _, e := range eps[i:] {
+		if ep, err := a.lib.PCEpisode(e.Show(), e.UUID); err == nil && (ep.OnCard || ep.Job != nil) {
+			b.WriteString(ep.Path + "\n")
+			n++
+		}
+	}
+	if n == 0 {
+		return q2spot.Fail(q2spot.Unavailable, "It isn't on the Q2 yet")
+	}
+	m3u := filepath.Join(a.opts.dir, "upnext.m3u")
+	if q2.WriteFile(m3u, []byte(b.String())) != nil ||
+		q2.WriteFile(a.opts.play, []byte(fmt.Sprintf("%d %s\n", time.Now().UnixMilli(), m3u))) != nil {
+		return q2spot.Fail(q2spot.Error, "Couldn't write to the card")
+	}
+	return q2spot.Reply{Message: "Playing Up Next"}
 }
 
 // anyMoving is whether an episode of eps is downloading or waiting to, so its page is asked again.

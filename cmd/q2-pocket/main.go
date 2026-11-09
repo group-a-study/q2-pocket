@@ -43,7 +43,7 @@ type options struct {
 	dir, card, statusFile, browse, control string
 	resume                                 string // Q2 Pod's places in what it played (resume.go)
 	sleep                                  string // the Sleep Timer's request to Q2 Pod (sleep.go)
-	places, upnext                         string // places for Q2 Pod's resume ring, and Up Next's songs (sync.go)
+	places, play                           string // places for Q2 Pod's resume ring (sync.go), and Up Next to play (pages.go)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
 }
@@ -93,7 +93,7 @@ func main() {
 	flag.StringVar(&o.resume, "resume-file", "/mnt/data/ringnav-resume", "Q2 Pod's places in what it played")
 	flag.StringVar(&o.sleep, "sleep-file", "/tmp/q2-pocket.sleep", "the Sleep Timer's request to Q2 Pod")
 	flag.StringVar(&o.places, "places-file", "/tmp/q2-pocket.places", "places for Q2 Pod's resume ring")
-	flag.StringVar(&o.upnext, "upnext-file", "/tmp/q2-pocket.upnext", "Up Next's songs, for Q2 Pod to play in order")
+	flag.StringVar(&o.play, "play-file", "/tmp/q2-pocket.play", "a playlist for Q2 Pod to play")
 	flag.StringVar(&o.browse, "browse-socket", "/tmp/q2-pocket.browse.sock", "Q2SPOT/1 for the Q2's page")
 	flag.StringVar(&o.control, "control-socket", "/tmp/q2-pocket.sock", "datagrams: q quits")
 	flag.IntVar(&o.port, "port", 8100, "the phone page's port (the next free one if taken)")

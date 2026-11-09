@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +17,8 @@ import (
 )
 
 // Signed in to Pocket Casts, the app keeps the Q2 and the account in step, as pocketcli does from a
-// computer (sync): the podcasts subscribed, Up Next (its first few episodes kept downloaded), and
+// computer (sync): the podcasts subscribed, Up Next (its first few episodes kept downloaded, played in
+// order from the Q2's Up Next page: pages.go), and
 // where each downloaded episode was left. Q2 Pod's resume ring says where the Q2 is in each
 // episode; a place it saves is sent to Pocket Casts, mapped from the episode as cut to the episode as
 // served (clean.Report.Original), and a place moved on another device is put in the ring (setPlaces:
@@ -195,7 +195,6 @@ func (s *syncer) once(ctx context.Context) {
 	s.places(ctx, inprog)
 	s.nowPlaying(ctx)
 	s.filePlaces(ctx)
-	s.writeUpNext()
 	s.save()
 	s.mu.Lock()
 	s.at, s.err = time.Now(), ""
@@ -471,24 +470,6 @@ func (s *syncer) nowPlaying(ctx context.Context) {
 	}
 }
 
-// writeUpNext leaves Up Next's downloaded episodes' paths, in order, for Q2 Pod to play one after
-// another from the one pressed (a local row's "list:" context, addon.c).
-func (s *syncer) writeUpNext() {
-	s.mu.Lock()
-	up := s.upnext
-	s.mu.Unlock()
-	var b strings.Builder
-	for _, e := range up {
-		if ep, err := s.a.lib.PCEpisode(e.Show(), e.UUID); err == nil && ep.OnCard {
-			b.WriteString(ep.Path + "\n")
-		}
-	}
-	if old, err := os.ReadFile(s.a.opts.upnext); err == nil && string(old) == b.String() {
-		return
-	}
-	q2.WriteFile(s.a.opts.upnext, []byte(b.String()))
-}
-
 // upNext is Up Next as last fetched, and whether it is being fetched.
 func (s *syncer) upNext() ([]pocketcasts.Episode, time.Time) {
 	s.mu.Lock()
@@ -562,7 +543,6 @@ func (s *syncer) signedOut() {
 	s.st.Eps, s.st.Migrated = map[string]*epSync{}, false
 	s.mu.Unlock()
 	s.save()
-	os.Remove(s.a.opts.upnext)
 }
 
 // fileList is the account's uploaded files.

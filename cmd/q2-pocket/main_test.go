@@ -60,7 +60,7 @@ func startApp(t *testing.T) (*app, string) {
 	t.Cleanup(func() { os.RemoveAll(socks) })
 	q2.CapsFile = filepath.Join(socks, "caps") // newer Q2 Pod's: the sleep feature offered
 	os.WriteFile(q2.CapsFile, []byte("playlist progress pages library sleep\n"), 0o644)
-	o := options{dir: filepath.Join(card, ".pocket"), card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"), upnext: filepath.Join(socks, "upnext"),
+	o := options{dir: filepath.Join(card, ".pocket"), card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"), play: filepath.Join(socks, "play"),
 		browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"), port: 18100,
 		resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: func() bool { return true }}
 	a, err := start(o)
