@@ -453,12 +453,15 @@ function renderAccount() {
   }
   const sync = account.sync || {};
   const line = sync.busy ? "Syncing…" : sync.error ? sync.error : sync.at && !sync.at.startsWith("0001") ? "Synced " + new Date(sync.at).toLocaleTimeString() : "Not synced yet";
-  card.append(row("Signed in", join(account.email, line), {buttons: [
+  const f = el("div", "field"), tools = el("div", "tools");
+  tools.append(
     button("Sync Now", "quiet", async () => { await api("pc/sync", {}); toast("Syncing"); }),
     button("Sign Out", "bad", async () => {
       if (!confirm("Sign out of Pocket Casts? Downloaded episodes stay on the Q2.")) return;
       await api("pc/logout", {}); await loadAccount(); openTab("settings");
-    })]}));
+    }));
+  f.append(el("div", "title", "Signed in as " + account.email), el("div", "sub", line), tools);
+  card.append(f);
 }
 
 const setting = (id, key, value) => {
