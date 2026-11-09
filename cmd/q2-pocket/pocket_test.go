@@ -270,3 +270,51 @@ func TestAdfreePage(t *testing.T) {
 	}
 	findRow(t, spot(t, a, "adfree"), "Remove Ads: Off")
 }
+
+// The phone page's Pocket Casts calls: sign in and out, settings (keys never read back), Up Next.
+func TestPhoneAccount(t *testing.T) {
+	a, _, _ := startSigned(t)
+	web := httptest.NewServer(newWeb(a))
+	defer web.Close()
+	c := web.Client()
+	cookie := "q2pocket=" + a.settings().Key
+	call := func(method, path, body string) (int, map[string]any) {
+		req, _ := http.NewRequest(method, web.URL+"/api/"+path, strings.NewReader(body))
+		req.Header.Set("Cookie", cookie)
+		req.Header.Set("X-Q2", "1")
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	if code, out := call("GET", "pc/account", ""); code != 200 || out["signedIn"] != true || out["email"] != "a@b.c" {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, _ := call("POST", "pc/settings", `{"ads":false,"upNext":3,"youTubeKey":" K1 "}`); code != 200 {
+		t.Fatal(code)
+	}
+	_, s := call("GET", "pc/settings", "")
+	if s["ads"] != false || s["upNext"] != 3.0 || s["youtube"] != true || s["youTubeKey"] != nil {
+		t.Errorf("settings %v", s)
+	}
+	if a.settings().YouTubeKey != "K1" {
+		t.Errorf("key %q", a.settings().YouTubeKey)
+	}
+	a.sy.once(context.Background())
+	if _, up := call("GET", "pc/upnext", ""); len(up["episodes"].([]any)) != 2 {
+		t.Errorf("up next %v", up)
+	}
+	if code, _ := call("POST", "pc/logout", "{}"); code != 200 || a.pc.SignedIn() {
+		t.Fatal("still signed in")
+	}
+	if _, err := os.Stat(filepath.Join(a.opts.dir, "account.json")); err == nil {
+		t.Error("the session stayed on the card")
+	}
+	if code, out := call("POST", "pc/login", `{"email":"a@b.c","password":""}`); code != 400 {
+		t.Errorf("empty password: %d %v", code, out)
+	}
+}

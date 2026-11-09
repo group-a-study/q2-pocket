@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Q2 Podcasts</title>
+<title>Q2 Pocket</title>
 <style>
 :root {
   --bg: #f4f4f6; --card: #fff; --ink: #18181b; --muted: #6b6b76; --line: #e3e3e8;
-  --accent: #8e44c9; --accent-ink: #fff; --bad: #c0392b; --good: #2e7d4f; --radius: 12px;
+  --accent: #e2453c; --accent-ink: #fff; --bad: #c0392b; --good: #2e7d4f; --radius: 12px;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #0f0f12; --card: #1b1b20; --ink: #ececf1; --muted: #9a9aa6; --line: #2c2c33; --accent: #b77be6; --accent-ink: #120a18; }
+  :root { --bg: #0f0f12; --card: #1b1b20; --ink: #ececf1; --muted: #9a9aa6; --line: #2c2c33; --accent: #f0675e; --accent-ink: #1a0807; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-main { max-width: 680px; margin: 0 auto; padding: 16px 16px 48px; }
-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 8px 0 16px; }
+main { max-width: 680px; margin: 0 auto; padding: 0 16px 48px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 16px 0 8px; }
 h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 24px 4px 8px; font-weight: 600; }
 .muted { color: var(--muted); font-size: 14px; }
@@ -26,75 +26,156 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .row .grow { flex: 1; min-width: 0; }
 .title { font-weight: 600; overflow-wrap: anywhere; }
 .sub { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.cut { color: var(--good); font-size: 13px; }
 .art { width: 48px; height: 48px; border-radius: 8px; background: var(--line); flex: none; object-fit: cover; }
 form.add { display: flex; gap: 8px; }
-input[type=text], input[type=search], input[type=password] { flex: 1; min-width: 0; font: inherit; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+input[type=text], input[type=search], input[type=password], input[type=email], select { flex: 1; min-width: 0; font: inherit; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); }
 button, .button { font: inherit; font-weight: 600; font-size: 15px; border: 0; border-radius: 999px; padding: 9px 16px; background: var(--accent); color: var(--accent-ink); cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block; }
 button.quiet, .button.quiet { background: transparent; color: var(--accent); border: 1px solid var(--line); }
 button.bad { background: transparent; color: var(--bad); border: 1px solid var(--line); }
+button.icon { padding: 6px 10px; background: transparent; color: var(--muted); border: 1px solid var(--line); }
 button:disabled { opacity: 0.5; cursor: default; }
 .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
 .tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.back { background: none; color: var(--accent); padding: 0; margin-bottom: 8px; }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; max-width: calc(100% - 32px); opacity: 0; transition: opacity .2s; pointer-events: none; }
+.back { background: none; color: var(--accent); padding: 0; margin: 12px 0 8px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; max-width: calc(100% - 32px); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; }
 .toast.on { opacity: 1; }
 .empty { padding: 20px 14px; color: var(--muted); }
-.switch { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.switch { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.switch:first-child { border-top: 0; }
+.switch input { width: 20px; height: 20px; flex: none; }
+.switch .grow { flex: 1; }
+.field { padding: 12px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.field:first-child { border-top: 0; }
+.field .line { display: flex; gap: 8px; }
 .hidden { display: none !important; }
 #login { max-width: 360px; margin: 18vh auto 0; text-align: center; }
 #login form { display: flex; gap: 8px; margin-top: 16px; }
+nav { position: sticky; top: 0; z-index: 10; background: var(--bg); display: flex; gap: 6px; overflow-x: auto; padding: 10px 0; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
+nav button { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; padding: 7px 14px; }
+nav button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; justify-content: center; z-index: 20; }
+.sheet .panel { background: var(--card); width: 100%; max-width: 680px; border-radius: 16px 16px 0 0; padding: 16px 16px max(16px, env(safe-area-inset-bottom)); max-height: 80vh; overflow-y: auto; }
+.sheet .panel button { width: 100%; margin-top: 8px; }
+.chip { font-size: 13px; color: var(--muted); }
+.cuts td { padding: 4px 8px 4px 0; font-size: 14px; vertical-align: top; }
 </style>
 </head>
 <body>
 <main>
   <section id="login" class="hidden">
-    <h1>Q2 Podcasts</h1>
-    <p class="muted">Type the PIN on the Q2's screen (Streaming → Podcasts → Add from Your Phone).</p>
+    <h1>Q2 Pocket</h1>
+    <p class="muted">Type the PIN on the Q2's screen (Streaming → Pocket → Phone Page).</p>
     <form id="loginForm"><input id="pin" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="PIN"><button>Sign in</button></form>
   </section>
 
-  <section id="home" class="hidden">
-    <header><h1>Podcasts</h1><span class="muted" id="summary"></span></header>
-    <form class="add" id="addForm">
-      <input id="addInput" type="search" placeholder="Search, or paste a feed address" autocomplete="off" autocapitalize="off">
-      <button id="addButton">Go</button>
-    </form>
-    <div id="results" class="hidden"><h2 id="resultsTitle">Results</h2><div class="card" id="resultsList"></div></div>
-    <div id="downloads" class="hidden"><h2>Downloads</h2><div class="card" id="jobsList"></div></div>
-    <h2>Shows</h2>
-    <div class="card" id="showsList"></div>
-    <div class="tools">
-      <button class="quiet" id="refreshAll">Refresh all</button>
-      <label class="button quiet">Import OPML<input id="opmlFile" type="file" accept=".opml,.xml,text/xml" class="hidden"></label>
-      <a class="button quiet" href="/api/opml">Export OPML</a>
-    </div>
-    <p class="muted" id="version"></p>
-  </section>
+  <div id="app" class="hidden">
+    <header><h1>Pocket</h1><span class="chip" id="accountChip"></span></header>
+    <nav id="tabs"></nav>
 
-  <section id="show" class="hidden">
-    <button class="back" id="backButton">‹ Shows</button>
-    <div class="card"><div class="row">
-      <img class="art" id="showArt" alt="">
-      <div class="grow"><div class="title" id="showTitle"></div><div class="sub" id="showSub"></div></div>
-    </div></div>
-    <div class="tools">
-      <label class="switch"><input type="checkbox" id="showAuto"> Download new episodes</label>
-    </div>
-    <div class="tools">
-      <button class="quiet" id="showRefresh">Refresh</button>
-      <button class="bad" id="showUnsub">Unsubscribe</button>
-    </div>
-    <h2>Episodes</h2>
-    <div class="card" id="episodesList"></div>
-  </section>
+    <section id="upnext" class="view hidden">
+      <p class="muted" id="upnextNote"></p>
+      <div class="card" id="upnextList"></div>
+    </section>
+
+    <section id="podcasts" class="view hidden">
+      <form class="add" id="addForm">
+        <input id="addInput" type="search" placeholder="Search, or paste a feed address" autocomplete="off" autocapitalize="off">
+        <button id="addButton">Go</button>
+      </form>
+      <div id="results" class="hidden"><h2 id="resultsTitle">Results</h2><div class="card" id="resultsList"></div></div>
+      <div id="downloads" class="hidden"><h2>Downloads</h2><div class="card" id="jobsList"></div></div>
+      <h2>Shows <span class="muted" id="summary"></span></h2>
+      <div class="card" id="showsList"></div>
+      <div class="tools">
+        <button class="quiet" id="refreshAll">Refresh all</button>
+        <label class="button quiet">Import OPML<input id="opmlFile" type="file" accept=".opml,.xml,text/xml" class="hidden"></label>
+        <a class="button quiet" href="/api/opml">Export OPML</a>
+      </div>
+    </section>
+
+    <section id="list" class="view hidden">
+      <p class="muted" id="listNote"></p>
+      <div class="card" id="listItems"></div>
+    </section>
+
+    <section id="files" class="view hidden">
+      <div class="card" id="filesList"></div>
+    </section>
+
+    <section id="discover" class="view hidden">
+      <div class="tools" id="discoverLists"></div>
+      <div class="card" id="discoverList" style="margin-top:12px"></div>
+    </section>
+
+    <section id="settings" class="view hidden">
+      <h2>Pocket Casts</h2>
+      <div class="card" id="accountCard"></div>
+      <h2>Ads &amp; Sponsors</h2>
+      <div class="card">
+        <label class="switch"><input type="checkbox" id="setAds"><span class="grow"><b>Remove ads</b><br><span class="sub">The ads a podcast's host stitches in as it serves an episode: found in the MP3's own frames, by comparing copies and episodes, and learned as they come back.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setSponsors"><span class="grow"><b>Remove sponsor reads</b><br><span class="sub">Read into the episode itself: from SponsorBlock (the episode's YouTube video or Spotify episode), its transcript and its chapters.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setSelfPromo"><span class="grow"><b>Also self-promotion</b><br><span class="sub">A show's plugs for itself, where SponsorBlock marks them.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setCopy"><span class="grow"><b>Compare with a second copy</b><br><span class="sub">When the host would send other ads (its size says), downloads it too: what the copies share is the episode.</span></span></label>
+      </div>
+      <p class="muted" id="cutStats"></p>
+      <h2>Downloads</h2>
+      <div class="card">
+        <div class="field"><b>Keep Up Next downloaded</b><div class="line"><select id="setUpNext">
+          <option value="0">None</option><option value="3">The first 3</option><option value="5">The first 5</option>
+          <option value="10">The first 10</option><option value="20">The first 20</option><option value="50">The first 50</option>
+          <option value="100">The first 100</option></select></div></div>
+        <label class="switch"><input type="checkbox" id="setDeletePlayed"><span class="grow"><b>Delete played episodes</b><br><span class="sub">Once Pocket Casts marks them played, unless Up Next still has them.</span></span></label>
+      </div>
+      <h2>Finding sponsor segments</h2>
+      <div class="card">
+        <div class="field"><b>YouTube Data API key</b>
+          <span class="sub">Finds an episode's video for SponsorBlock when its show notes don't link it. A free key from console.cloud.google.com (YouTube Data API v3); each search spends 100 of its 10,000 daily units.</span>
+          <div class="line"><input type="password" id="ytKey" autocomplete="off" placeholder="Not set"><button class="quiet" id="ytSave">Save</button></div></div>
+        <div class="field"><b>Spotify app</b>
+          <span class="sub">Finds an episode on Spotify for Spot SponsorBlock. Make an app at developer.spotify.com and copy its client ID and secret.</span>
+          <div class="line"><input type="text" id="spId" autocomplete="off" placeholder="Client ID"></div>
+          <div class="line"><input type="password" id="spSecret" autocomplete="off" placeholder="Client secret"><button class="quiet" id="spSave">Save</button></div></div>
+      </div>
+      <p class="muted" id="version"></p>
+    </section>
+
+    <section id="show" class="view hidden">
+      <button class="back" id="backButton">‹ Podcasts</button>
+      <div class="card"><div class="row">
+        <img class="art" id="showArt" alt="">
+        <div class="grow"><div class="title" id="showTitle"></div><div class="sub" id="showSub"></div></div>
+      </div></div>
+      <div class="tools">
+        <label class="muted"><input type="checkbox" id="showAuto"> Download new episodes</label>
+      </div>
+      <div class="tools">
+        <button class="quiet" id="showRefresh">Refresh</button>
+        <button class="bad" id="showUnsub">Unsubscribe</button>
+      </div>
+      <h2>Episodes</h2>
+      <div class="card" id="episodesList"></div>
+    </section>
+  </div>
 </main>
+<div class="sheet hidden" id="sheet"><div class="panel" id="sheetPanel"></div></div>
 <div class="toast" id="toast"></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-let current = null; // the open show's key
+let tab = "upnext";   // the open tab
+let listName = "";    // the open list's
+let current = null;   // the open show's key
+let account = {signedIn: false};
 let toastTimer = 0;
+
+const TABS = [
+  ["upnext", "Up Next", true], ["podcasts", "Podcasts", false], ["new", "New", true], ["inprog", "In Progress", true],
+  ["starred", "Starred", true], ["history", "History", true], ["files", "Files", true], ["discover", "Discover", false],
+  ["settings", "Settings", false]];
+const LISTS = {new: "New Releases", inprog: "In Progress", starred: "Starred", history: "History"};
 
 function toast(msg) {
   const t = $("toast");
@@ -109,14 +190,12 @@ async function api(path, body) {
     body: typeof body === "string" ? body : JSON.stringify(body)};
   const r = await fetch("/api/" + path, opts);
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401) { show("login"); throw new Error("Sign in first"); }
+  if (r.status === 401) { showLogin(); throw new Error("Sign in first"); }
   if (!r.ok) throw new Error(data.error || "Something went wrong (" + r.status + ")");
   return data;
 }
 
-function show(view) {
-  for (const v of ["login", "home", "show"]) $(v).classList.toggle("hidden", v !== view);
-}
+function showLogin() { $("login").classList.remove("hidden"); $("app").classList.add("hidden"); }
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -132,10 +211,16 @@ function size(b) {
   return (b / (1 << 30)).toFixed(1) + " GB";
 }
 function length(s) {
-  if (!s) return "";
+  if (!s || s <= 0) return "";
+  if (s < 60) return Math.round(s) + " sec";
   if (s < 3600) return Math.round(s / 60) + " min";
   const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
   return m ? h + " hr " + m + " min" : h + " hr";
+}
+function clock(s) {
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
 }
 function day(iso) {
   if (!iso || iso.startsWith("0001")) return "";
@@ -157,6 +242,7 @@ function row(title, sub, opts = {}) {
   const g = el("div", "grow");
   g.append(el("div", "title", title));
   if (sub) g.append(el("div", "sub", sub));
+  if (opts.cut) g.append(el("div", "cut", opts.cut));
   if (opts.progress !== undefined) {
     const bar = el("div", "bar"), fill = el("i");
     fill.style.width = Math.max(2, opts.progress) + "%";
@@ -185,23 +271,234 @@ function jobLine(j) {
   return j.error ? "Trying again soon: " + j.error : "Waiting";
 }
 
-function renderHome(s) {
-  $("summary").textContent = join(s.downloaded ? s.downloaded + " on the Q2 (" + size(s.bytes) + ")" : "",
-    s.refreshing ? "updating…" : "");
-  $("version").textContent = "Q2 Podcasts " + s.version.replace("q2-", "");
+// Tabs
+
+function renderTabs() {
+  const nav = $("tabs");
+  nav.replaceChildren();
+  for (const [id, label, needs] of TABS) {
+    if (needs && !account.signedIn) continue;
+    const b = el("button", id === tab ? "on" : "", label);
+    b.onclick = () => openTab(id);
+    nav.append(b);
+  }
+}
+
+function openTab(id) {
+  tab = id;
+  current = null;
+  listName = LISTS[id] ? id : "";
+  for (const v of document.querySelectorAll(".view")) v.classList.add("hidden");
+  $(LISTS[id] ? "list" : id).classList.remove("hidden");
+  renderTabs();
+  if (LISTS[id]) $("listItems").replaceChildren(el("div", "empty", "Loading…"));
+  window.scrollTo(0, 0);
+  refresh();
+}
+
+// Episodes of the account (Up Next and the lists)
+
+function pcLine(e) {
+  let when = join(e.show, day(e.published), length(e.duration));
+  if (e.status === 2 && e.playedUpTo > 0 && e.duration > e.playedUpTo) when = join(e.show, length(e.duration - e.playedUpTo) + " left");
+  if (e.status === 3) when = join(when, "Played");
+  if (e.onCard) return join(when, "On the Q2");
+  if (e.job) return join(when, jobLine(e.job));
+  return when;
+}
+
+function pcRow(e) {
+  let pct;
+  if (e.job && e.job.state === "active" && e.job.size > 0) pct = e.job.done * 100 / e.job.size;
+  const btns = [];
+  if (!e.onCard && !e.job) btns.push(button("Get", "quiet", () => act(e, "download")));
+  btns.push(button(e.starred ? "★" : "☆", "icon", () => act(e, e.starred ? "unstar" : "star")));
+  return row(e.title, pcLine(e), {progress: pct, cut: e.cut, buttons: btns, onclick: () => sheet(e)});
+}
+
+async function act(e, action) {
+  const r = await api("pc/episode", {podcast: e.podcast, uuid: e.uuid, action: action});
+  toast(r.message);
+  closeSheet();
+  refresh();
+}
+
+function sheet(e) {
+  const p = $("sheetPanel");
+  p.replaceChildren(el("div", "title", e.title), el("div", "sub", pcLine(e)));
+  if (e.cut) p.append(el("div", "cut", e.cut));
+  const add = (label, cls, fn) => p.append(button(label, cls, fn));
+  if (e.upNext) add("Remove from Up Next", "quiet", () => act(e, "remove"));
+  else { add("Play Next", "", () => act(e, "next")); add("Play Last", "quiet", () => act(e, "last")); }
+  if (!e.onCard && !e.job) add("Download to the Q2", "quiet", () => act(e, "download"));
+  add(e.starred ? "Take the Star Away" : "Star", "quiet", () => act(e, e.starred ? "unstar" : "star"));
+  add(e.status === 3 ? "Mark Unplayed" : "Mark Played", "quiet", () => act(e, e.status === 3 ? "unplayed" : "played"));
+  if (e.onCard && e.key) add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
+  add("Close", "quiet", async () => closeSheet());
+  $("sheet").classList.remove("hidden");
+}
+function closeSheet() { $("sheet").classList.add("hidden"); }
+$("sheet").onclick = e => { if (e.target === $("sheet")) closeSheet(); };
+
+async function report(key, eid, title) {
+  const r = await api("pc/report?key=" + encodeURIComponent(key) + "&eid=" + encodeURIComponent(eid));
+  const p = $("sheetPanel");
+  p.replaceChildren(el("div", "title", title), el("div", "sub", r.note || ("Checked " + day(r.checked) + " · " + length(r.length) + " as downloaded")));
+  if (r.cuts && r.cuts.length) {
+    const t = el("table", "cuts");
+    for (const c of r.cuts) {
+      const tr = el("tr");
+      tr.append(el("td", "", clock(c.from) + "–" + clock(c.to)), el("td", "", c.kind === "ad" ? "Ad" : "Sponsor"), el("td", "muted", c.why));
+      t.append(tr);
+    }
+    p.append(t);
+  } else if (!r.note) p.append(el("p", "muted", "Nothing was cut."));
+  if (r.sources && r.sources.length) p.append(el("p", "muted", "Looked at: " + r.sources.join("; ")));
+  p.append(button("Close", "quiet", async () => closeSheet()));
+  $("sheet").classList.remove("hidden");
+}
+
+function renderUpNext(d) {
+  const list = $("upnextList");
+  list.replaceChildren();
+  $("upnextNote").textContent = d.loading ? "Asking Pocket Casts…" : d.episodes.length + " episodes";
+  if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Up Next is empty."));
+  for (const e of d.episodes.slice(0, 200)) list.append(pcRow(e));
+  if (d.episodes.length > 200) list.append(el("div", "empty", "…and " + (d.episodes.length - 200) + " more"));
+}
+
+function renderList(d) {
+  const list = $("listItems");
+  list.replaceChildren();
+  $("listNote").textContent = d.error ? d.error : d.loading ? "Asking Pocket Casts…" : "";
+  if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Nothing here."));
+  for (const e of d.episodes) list.append(pcRow(e));
+}
+
+function renderFiles(d) {
+  const list = $("filesList");
+  list.replaceChildren();
+  if (d.error) { list.append(el("div", "empty", d.error)); return; }
+  if (d.loading && !d.files.length) { list.append(el("div", "empty", "Loading…")); return; }
+  if (!d.files.length) list.append(el("div", "empty", "No files uploaded to Pocket Casts."));
+  for (const f of d.files) {
+    const btns = [];
+    if (!f.onCard && !f.state) btns.push(button("Get", "quiet", async () => { toast((await api("pc/file", {uuid: f.uuid, action: "download"})).message); refresh(); }));
+    btns.push(button("Delete", "bad", async () => {
+      if (!confirm("Delete “" + f.title + "” from Pocket Casts? It goes from every device.")) return;
+      await api("pc/file", {uuid: f.uuid, action: "delete"}); refresh();
+    }));
+    list.append(row(f.title, join(length(f.duration), size(f.size), f.onCard ? "On the Q2" : f.state), {buttons: btns}));
+  }
+}
+
+let discoverName = "trending";
+async function renderDiscover() {
+  const lists = $("discoverLists");
+  lists.replaceChildren();
+  for (const [n, label] of [["trending", "Trending"], ["popular", "Popular"], ["featured", "Featured"]]) {
+    const b = el("button", n === discoverName ? "" : "quiet", label);
+    b.onclick = () => { discoverName = n; renderDiscover(); };
+    lists.append(b);
+  }
+  const list = $("discoverList");
+  list.replaceChildren(el("div", "empty", "Loading…"));
+  const pods = await api("pc/discover?name=" + discoverName);
+  list.replaceChildren();
+  for (const p of pods) {
+    const b = p.subscribed ? el("span", "muted", "Subscribed") : button("Subscribe", "", async () => {
+      toast((await api("pc/discover", {uuid: p.uuid})).message);
+      b.replaceWith(el("span", "muted", "Subscribed"));
+    });
+    list.append(row(p.title, p.author, {art: p.image, buttons: [b]}));
+  }
+}
+
+// Settings
+
+async function renderSettings() {
+  const s = await api("pc/settings");
+  $("setAds").checked = s.ads;
+  $("setSponsors").checked = s.sponsors;
+  $("setSelfPromo").checked = s.selfPromo;
+  $("setCopy").checked = s.copy;
+  $("setDeletePlayed").checked = s.deletePlayed;
+  $("setUpNext").value = String(s.upNext);
+  $("ytKey").placeholder = s.youtube ? "Set (type a new one to change it)" : "Not set";
+  $("spSecret").placeholder = s.spotify ? "Set (type a new one to change it)" : "Client secret";
+  const c = s.cut;
+  $("cutStats").textContent = c.ads + c.sponsors
+    ? "So far: " + c.ads + " ads and " + c.sponsors + " sponsor reads cut, " + length(c.seconds) + " from " + c.episodes + " episodes. " + c.learned + " ads learned."
+    : c.learned + " ads learned.";
+  renderAccount();
+}
+
+function renderAccount() {
+  const card = $("accountCard");
+  card.replaceChildren();
+  if (!account.signedIn) {
+    const f = el("form", "field");
+    const email = el("input"); email.type = "email"; email.placeholder = "Email"; email.autocomplete = "username";
+    const pw = el("input"); pw.type = "password"; pw.placeholder = "Password"; pw.autocomplete = "current-password";
+    const go = el("button", "", "Sign In");
+    f.append(el("span", "sub", "Your podcasts, Up Next and places sync with Pocket Casts. The password goes to Pocket Casts only; the Q2 keeps the session it gives."), email, pw, go);
+    f.onsubmit = async e => {
+      e.preventDefault();
+      go.disabled = true;
+      try { await api("pc/login", {email: email.value, password: pw.value}); toast("Signed in"); await loadAccount(); openTab("upnext"); }
+      catch (err) { toast(err.message); } finally { go.disabled = false; }
+    };
+    card.append(f);
+    return;
+  }
+  const sync = account.sync || {};
+  const line = sync.busy ? "Syncing…" : sync.error ? sync.error : sync.at && !sync.at.startsWith("0001") ? "Synced " + new Date(sync.at).toLocaleTimeString() : "Not synced yet";
+  card.append(row("Signed in", join(account.email, line), {buttons: [
+    button("Sync Now", "quiet", async () => { await api("pc/sync", {}); toast("Syncing"); }),
+    button("Sign Out", "bad", async () => {
+      if (!confirm("Sign out of Pocket Casts? Downloaded episodes stay on the Q2.")) return;
+      await api("pc/logout", {}); await loadAccount(); openTab("settings");
+    })]}));
+}
+
+const setting = (id, key, value) => {
+  $(id).onchange = async e => {
+    const body = {};
+    body[key] = value(e.target);
+    try { await api("pc/settings", body); toast("Saved"); } catch (err) { toast(err.message); }
+  };
+};
+setting("setAds", "ads", t => t.checked);
+setting("setSponsors", "sponsors", t => t.checked);
+setting("setSelfPromo", "selfPromo", t => t.checked);
+setting("setCopy", "copy", t => t.checked);
+setting("setDeletePlayed", "deletePlayed", t => t.checked);
+setting("setUpNext", "upNext", t => parseInt(t.value, 10));
+$("ytSave").onclick = async () => {
+  try { await api("pc/settings", {youTubeKey: $("ytKey").value}); $("ytKey").value = ""; toast("Saved"); renderSettings(); } catch (err) { toast(err.message); }
+};
+$("spSave").onclick = async () => {
+  try { await api("pc/settings", {spotifyId: $("spId").value, spotifySecret: $("spSecret").value}); $("spId").value = $("spSecret").value = ""; toast("Saved"); renderSettings(); } catch (err) { toast(err.message); }
+};
+
+// Podcasts (the shows on the Q2) and a show
+
+function renderPodcasts(s) {
+  $("summary").textContent = join(s.downloaded ? s.downloaded + " on the Q2 (" + size(s.bytes) + ")" : "", s.refreshing ? "updating…" : "");
+  $("version").textContent = "Q2 Pocket " + s.version.replace("q2-", "");
   const jobs = $("jobsList");
   jobs.replaceChildren();
   $("downloads").classList.toggle("hidden", !s.jobs.length);
   for (const j of s.jobs) {
     const pct = j.state === "active" && j.size > 0 ? j.done * 100 / j.size : undefined;
-    jobs.append(row(j.title, join(j.show, jobLine(j)), {progress: pct, buttons: [
+    jobs.append(row(j.title, join(j.show, j.note || jobLine(j)), {progress: pct, buttons: [
       j.state === "failed"
         ? button("Retry", "quiet", () => api("download", {key: j.key, eid: j.eid}).then(refresh))
         : button("Cancel", "quiet", () => api("cancel", {key: j.key, eid: j.eid}).then(refresh))]}));
   }
   const list = $("showsList");
   list.replaceChildren();
-  if (!s.shows.length) list.append(el("div", "empty", "No shows yet. Search above, paste a feed's address, or import OPML from another podcast app."));
+  if (!s.shows.length) list.append(el("div", "empty", "No shows yet. Search above, paste a feed's address, import OPML, or sign in to Pocket Casts in Settings."));
   for (const sh of s.shows) {
     const sub = sh.error && !sh.episodes ? "Couldn't load: " + sh.error
       : sh.refreshing && !sh.episodes ? "Loading…"
@@ -230,7 +527,7 @@ function renderShow(d) {
         await api("delete", id); refresh();
       });
     } else if (e.job) {
-      sub = join(when, jobLine(e.job));
+      sub = join(when, e.job.note || jobLine(e.job));
       if (e.job.state === "active" && e.job.size > 0) pct = e.job.done * 100 / e.job.size;
       btn = e.job.state === "failed"
         ? button("Retry", "quiet", () => api("download", id).then(refresh))
@@ -239,30 +536,23 @@ function renderShow(d) {
       sub = join(when, size(e.length));
       btn = button("Download", "", async () => { toast((await api("download", id)).message); refresh(); });
     }
-    list.append(row(e.title, sub, {progress: pct, buttons: [btn]}));
-  }
-}
-
-let busy = false;
-async function refresh() {
-  if (busy) return;
-  busy = true;
-  try {
-    if (current) {
-      renderShow(await api("show?key=" + encodeURIComponent(current)));
-    } else {
-      renderHome(await api("state"));
+    const opts = {progress: pct, cut: e.cut, buttons: [btn]};
+    if (e.onCard) opts.onclick = () => report(sh.key, e.eid, e.title);
+    if (account.signedIn && e.pc && e.uuid) {
+      opts.buttons.unshift(button("Up Next", "quiet", async () => {
+        toast((await api("pc/episode", {podcast: e.pc, uuid: e.uuid, action: "last"})).message);
+      }));
     }
-  } catch (err) {
-    if (current && /isn't subscribed/.test(err.message)) { current = null; show("home"); }
-  } finally { busy = false; }
+    list.append(row(e.title, sub, opts));
+  }
 }
 
 function openShow(key) {
   current = key;
   $("episodesList").replaceChildren();
   $("showArt").removeAttribute("src");
-  show("show");
+  for (const v of document.querySelectorAll(".view")) v.classList.add("hidden");
+  $("show").classList.remove("hidden");
   window.scrollTo(0, 0);
   refresh();
 }
@@ -308,18 +598,17 @@ $("loginForm").onsubmit = async e => {
   e.preventDefault();
   try {
     await api("login", {PIN: $("pin").value});
-    show("home");
-    refresh();
+    await boot();
   } catch (err) { toast(err.message); }
 };
 
-$("backButton").onclick = () => { current = null; show("home"); refresh(); };
+$("backButton").onclick = () => openTab("podcasts");
 $("refreshAll").onclick = () => api("refresh", {}).then(() => { toast("Updating every show"); refresh(); }, err => toast(err.message));
 $("showRefresh").onclick = () => api("refresh", {key: current}).then(() => { toast("Updating"); refresh(); }, err => toast(err.message));
 $("showAuto").onchange = e => api("auto", {key: current, on: e.target.checked}).then(refresh, err => toast(err.message));
 $("showUnsub").onclick = async () => {
   if (!confirm("Unsubscribe from “" + $("showTitle").textContent + "”? Downloaded episodes stay on the Q2.")) return;
-  try { await api("unsubscribe", {key: current}); current = null; show("home"); refresh(); } catch (err) { toast(err.message); }
+  try { await api("unsubscribe", {key: current}); openTab("podcasts"); } catch (err) { toast(err.message); }
 };
 $("opmlFile").onchange = async e => {
   const f = e.target.files[0];
@@ -332,9 +621,47 @@ $("opmlFile").onchange = async e => {
   e.target.value = "";
 };
 
+// Refreshing
+
+async function loadAccount() {
+  account = await api("pc/account");
+  const s = account.sync || {};
+  $("accountChip").textContent = !account.signedIn ? "Not signed in" : s.error ? s.error : s.busy ? "Syncing…" : account.email;
+  renderTabs();
+}
+
+let busy = false;
+async function refresh() {
+  if (busy || !$("sheet").classList.contains("hidden")) return;
+  busy = true;
+  try {
+    if (current) renderShow(await api("show?key=" + encodeURIComponent(current)));
+    else if (tab === "upnext") renderUpNext(await api("pc/upnext"));
+    else if (listName) renderList(await api("pc/list?name=" + listName));
+    else if (tab === "podcasts") renderPodcasts(await api("state"));
+    else if (tab === "files") renderFiles(await api("pc/files"));
+    else if (tab === "discover") await renderDiscover();
+    else if (tab === "settings") await renderSettings();
+  } catch (err) {
+    if (current && /isn't subscribed/.test(err.message)) openTab("podcasts");
+  } finally { busy = false; }
+}
+
+async function boot() {
+  await loadAccount();
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  openTab(account.signedIn ? "upnext" : "podcasts");
+}
+
 (async () => {
-  try { renderHome(await api("state")); show("home"); } catch (err) { /* api() showed the sign-in */ }
-  setInterval(() => { if (!document.hidden && (current || !$("home").classList.contains("hidden"))) refresh(); }, 2500);
+  try { await boot(); } catch (err) { /* api() showed the sign-in */ }
+  let n = 0;
+  setInterval(() => {
+    if (document.hidden || $("app").classList.contains("hidden")) return;
+    if (++n % 4 === 0) loadAccount().catch(() => {});
+    if (tab !== "discover" && tab !== "settings" || current) refresh();
+  }, 2500);
 })();
 </script>
 </body>

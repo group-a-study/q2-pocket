@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/directory"
 	"q2-pocket/internal/feed"
 	"q2-pocket/internal/library"
@@ -159,16 +160,20 @@ type jobJSON struct {
 	Err   string `json:"error,omitempty"`
 	Done  int64  `json:"done"`
 	Size  int64  `json:"size"`
+	Note  string `json:"note,omitempty"` // once downloaded: "Checking for ads"
 }
 
 var states = map[library.JobState]string{library.Waiting: "waiting", library.Active: "active", library.Failed: "failed"}
 
 func jobOut(j library.JobInfo) jobJSON {
-	return jobJSON{Key: j.Key, EID: j.EID, Show: j.Show, Title: j.Title, State: states[j.State], Err: j.Err, Done: j.Done, Size: j.Size}
+	return jobJSON{Key: j.Key, EID: j.EID, Show: j.Show, Title: j.Title, State: states[j.State], Err: j.Err, Done: j.Done, Size: j.Size, Note: j.Note}
 }
 
 type episodeJSON struct {
 	EID      string    `json:"eid"`
+	PC       string    `json:"pc,omitempty"`   // its show's Pocket Casts id
+	UUID     string    `json:"uuid,omitempty"` // its own
+	Cut      string    `json:"cut,omitempty"`  // what was cut from it
 	Title    string    `json:"title"`
 	Date     time.Time `json:"date"`
 	Duration int       `json:"duration"`
@@ -208,7 +213,7 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			refuse(rw, http.StatusRequestEntityTooLarge, "That's too big")
 			return
 		}
-		if route != "opml" && len(raw) > 0 && json.Unmarshal(raw, &body) != nil {
+		if route != "opml" && !strings.HasPrefix(route, "pc/") && len(raw) > 0 && json.Unmarshal(raw, &body) != nil {
 			refuse(rw, http.StatusBadRequest, "bad body")
 			return
 		}
@@ -221,6 +226,8 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		refuse(rw, code, say(err))
 	}
 	switch {
+	case strings.HasPrefix(route, "pc/"):
+		w.pc(rw, r, strings.TrimPrefix(route, "pc/"), post, raw)
 	case route == "state" && !post:
 		shows := []showJSON{}
 		for _, s := range lib.Shows() {
@@ -244,7 +251,12 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		out := make([]episodeJSON, 0, len(eps))
 		for _, e := range eps {
 			ej := episodeJSON{EID: e.EID, Title: e.Title, Date: e.Date, Duration: e.Duration, Length: e.Length,
-				OnCard: e.OnCard, Size: e.Size}
+				OnCard: e.OnCard, Size: e.Size, PC: e.PC, UUID: e.Feed.PC}
+			if r := clean.Load(w.a.opts.dir, e.Key, e.EID); e.OnCard && r != nil {
+				if ads, sp, _ := r.Removed(); ads+sp > 0 {
+					ej.Cut = r.Summary()
+				}
+			}
 			if e.Job != nil {
 				j := jobOut(*e.Job)
 				ej.Job = &j

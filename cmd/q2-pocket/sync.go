@@ -595,5 +595,14 @@ func (s *syncer) uploaded() ([]pocketcasts.File, error, bool) {
 	return f.files, f.err, f.loading
 }
 
+// dropFiles forgets the uploaded files, so they are asked for again.
+func (s *syncer) dropFiles() {
+	s.mu.Lock()
+	if s.files != nil && !s.files.loading {
+		s.files.at = time.Time{}
+	}
+	s.mu.Unlock()
+}
+
 // roundMin is seconds as whole minutes, for a row.
 func roundMin(sec float64) int { return int(math.Round(sec / 60)) }
