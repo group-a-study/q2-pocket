@@ -2,18 +2,18 @@ Shanling Q2 tools
 =================
 
 The Q2 runs Linux 5.10 on an Ingenic X2000 (MIPS32r2, nan2008) with glibc 2.28, no IPv6 and no CA
-bundle. q2-podcasts runs from the card's .podcasts folder as a Q2 Pod card app (q2-pod's
+bundle. q2-pocket runs from the card's .pocket folder as a Q2 Pod card app (q2-pod's
 patch/addon.c): Q2 Pod lists it in Streaming, starts it from that row, draws its page and keeps the
 Q2 awake while it downloads. Nothing is flashed for it.
 
-  build.sh     static Go for the Q2 and the card files, in target/shanlingq2/.podcasts, zipped as
-               target/shanlingq2/q2-podcasts-vX.Y-SHA.zip (unzip that at the card's root)
+  build.sh     static Go for the Q2 and the card files, in target/shanlingq2/.pocket, zipped as
+               target/shanlingq2/q2-pocket-vX.Y-SHA.zip (unzip that at the card's root)
   package.py   checks the binary (static, MIPS32 little-endian, soft-float ABI), sets the nan2008
                ELF flag the Q2's kernel requires and Go doesn't, and writes the ZIP (from
                q2-filebrowser)
-  launcher.sh  installed as .podcasts/run: q2-podcasts copied to /tmp and run there at nice 10 in a
+  launcher.sh  installed as .pocket/run: q2-pocket copied to /tmp and run there at nice 10 in a
                restart loop
-  q2app        installed as .podcasts/q2app: the card app manifest (name=Podcasts, search=Search
+  q2app        installed as .pocket/q2app: the card app manifest (name=Pocket, search=Search
                Podcasts, qr=0: the QR code opens from a row, not at every start)
   icon.png, icon-40.png
                installed beside it: Streaming's row icon, 52 px (Legacy) and 40 px (iPod), Q2 Pod's
@@ -34,21 +34,29 @@ was never set, certificates are checked at the time a plain-HTTP Date header giv
 Device
 ------
 
-Q2 Pod runs /bin/sh /mnt/mmc/.podcasts/run when Streaming's Podcasts row is pressed and it isn't
-running. The launcher copies q2-podcasts and itself to /tmp and leaves the card at once, so USB
+Q2 Pod runs /bin/sh /mnt/mmc/.pocket/run when Streaming's Pocket row is pressed and it isn't
+running. The launcher copies q2-pocket and itself to /tmp and leaves the card at once, so USB
 storage can always take the card. The loop restarts it after a failure, waiting 5 s and doubling to
-a minute, and leaves its pid in /tmp/q2-podcasts. An exit of 0 (turned off from the Q2, or idle 15
-minutes with nothing to download) ends the loop. A TERM to it stops q2-podcasts cleanly, keeping a
-download under way in .podcasts/partial to resume. Q2 Pod sends it for Stop Streaming Services,
+a minute, and leaves its pid in /tmp/q2-pocket. An exit of 0 (turned off from the Q2, or idle 15
+minutes with nothing to download) ends the loop. A TERM to it stops q2-pocket cleanly, keeping a
+download under way in .pocket/partial to resume. Q2 Pod sends it for Stop Streaming Services,
 Home's Rockbox row, an Apps update or remove, and USB storage (after which it starts it again).
 
-  /tmp/q2-podcasts.state
+  /tmp/q2-pocket.state
       addr (the phone page's, with its port), pin, qr and qrsize (the code for the address with the
       key), note, hold (1: a feed is being fetched, a download can run, or the phone page was used
       in the last 5 minutes), version
-  /tmp/q2-podcasts.sock
+  /tmp/q2-pocket.sock
       datagrams: q quits
-  /tmp/q2-podcasts.browse.sock
+  /tmp/q2-pocket.sleep
+      the Sleep Timer's request (Q2 Pod's sleep_read): "until <unix time>" or "end"
+  /tmp/q2-pocket.play
+      "<seq> /mnt/mmc/.pocket/upnext.m3u": Up Next from the episode pressed, for Q2 Pod to play in
+      order (its "playlist" cap)
+  /tmp/q2-pocket.places
+      "<seconds>\t<path>" lines: places moved on another device, for Q2 Pod's resume ring (its
+      "places" cap); Q2 Pod reads and removes it
+  /tmp/q2-pocket.browse.sock
       Q2SPOT/1 (q2-pod's docs/librespot.md) for the Q2's page, below
   port 8100 (the next free one if taken)
       the phone page and its JSON API, behind the cookie: GET /api/state, /api/show?key=,
@@ -57,7 +65,7 @@ Home's Rockbox row, an Apps update or remove, and USB storage (after which it st
       (the file as the body). POST /api/login takes the PIN; /?k=KEY sets the cookie. Every POST
       needs the header X-Q2: 1.
 
-Downloads go one at a time to .podcasts/partial/<key>-<eid>.part in 512 KB chunks, each opened,
+Downloads go one at a time to .pocket/partial/<key>-<eid>.part in 512 KB chunks, each opened,
 written, synced and closed, so the card is almost never busy. A break resumes with an HTTP Range;
 a server that answers 200 instead starts the file again. 60 s without a byte is a stall. A whole file
 is renamed into Podcasts/<Show>/ and dated to the episode. A failure for the network is tried
@@ -73,8 +81,11 @@ the card, info does nothing. A row's position is the op Play/Pause held sends. A
 is "refresh" is asked again every 2 s while on screen.
 
   menu
-      New Episodes, Shows, Downloaded, Downloads (while there are any), Search Podcasts, Add from
-      Your Phone (remote), Refresh All, Turn Off Podcasts; refresh while fetching or downloading
+      Signed in: Up Next, In Progress, New Releases, Starred; then Podcasts (shows), Downloaded, Downloads
+      (while there are any), Files, History, Discover, Sleep Timer, Search Podcasts, Ads & Sponsors,
+      Sync Now, Phone Page (remote), Refresh All, Turn Off Pocket. Signed out: New Episodes, Podcasts,
+      Downloaded, Downloads, Discover, Sleep Timer, Search Podcasts, Ads & Sponsors, Sign In to
+      Pocket Casts (remote), Refresh All, Turn Off Pocket; refresh while fetching, downloading or syncing
   shows
       list rows: show <key>
   show <key> [cursor]

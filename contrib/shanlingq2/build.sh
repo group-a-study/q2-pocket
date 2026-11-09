@@ -1,6 +1,6 @@
 #!/bin/sh
-# q2-podcasts for the Shanling Q2: static Go for 32-bit little-endian MIPS with soft float, staged with
-# its card files in OUT/.podcasts and zipped as a release ships it, OUT/q2-podcasts-vX.Y-SHA.zip, to
+# q2-pocket for the Shanling Q2: static Go for 32-bit little-endian MIPS with soft float, staged with
+# its card files in OUT/.pocket and zipped as a release ships it, OUT/q2-pocket-vX.Y-SHA.zip, to
 # unzip at the card's root (or for System settings -> Apps to install).
 #   contrib/shanlingq2/build.sh [OUT]
 # Needs Go 1.22 or later and python3. It has no dependencies outside Go's standard library.
