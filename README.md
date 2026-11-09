@@ -3,7 +3,7 @@
 A podcast app for the **Shanling Q2** running [Q2 Pod](https://github.com/DiamondBond/q2-pod), with your **Pocket Casts** account and **no ads**. It does everything [q2-podcasts](https://github.com/m-d-e-v/q2-podcasts) does (subscribe by feed or search, download over Wi-Fi, play from the card's `Podcasts` folder, where Q2 Pod resumes each episode and keeps it out of your music library), and:
 
 - **Pocket Casts sync**, as [pocketcli](https://github.com/foforivera/pocketcli) does it from a computer: your podcasts, Up Next, In Progress, New Releases, Starred, History, uploaded Files and Discover; where you are in each episode, both ways; played episodes marked played; the episode you start becomes Up Next's first and goes in your listening history.
-- **Offline:** Up Next's first episodes stay downloaded (10 unless you choose otherwise), and any episode downloads with a press.
+- **Offline:** all of Up Next stays downloaded (or its first few, if you choose), and any episode downloads with a press. Each episode's show notes go beside it, and its chapters into it when its publisher gives them, for Q2 Pod's Now Playing.
 - **No ads:** every MP3 it downloads has the ads its host stitched in removed before it lands on the card, and sponsor reads in the episode itself are cut too.
 
 It needs Q2 Pod with card apps (1.4.2 or later). Two things want newer Q2 Pod: Up Next playing straight through in order (firmware that lists `playlist` in `/tmp/q2-addon.caps`), and places moved on your phone arriving on the Q2 (`places`).
@@ -18,6 +18,18 @@ Open **Streaming → Pocket → Sign In to Pocket Casts**: the Q2 shows a QR cod
 
 Signed out, Pocket works as q2-podcasts does, ad removal included.
 
+## How places sync
+
+Every three minutes while Pocket runs (and at once with **Sync Now**), each downloaded episode's place on the Q2 and in Pocket Casts are compared with where they were at the last sync. Pocket Casts says nothing about *when* a place changed, so:
+
+- Moved only on the Q2: sent to Pocket Casts. Moved only elsewhere: put in the Q2's resume place, so the episode starts there (a Q2 Pod with `places`).
+- Moved on both, or an episode new to the sync with a place on each side: the further place wins on both, so nothing heard is lost and neither side is set back.
+- A place of 0 is never sent: starting an episode again near its beginning doesn't wipe Pocket Casts' place.
+- Finished on the Q2 (its place gone in the last five minutes): marked played and taken out of Up Next. Marked played elsewhere: the Q2 forgets its place. Marked unplayed elsewhere: the same.
+- Places are mapped through the cut ads, so a place on the Q2 and the same moment on your phone agree.
+
+Without `places`, a place from elsewhere waits until the Q2 itself moves on; nothing is sent back over it.
+
 ## Use
 
 On the Q2 (**Streaming → Pocket**):
@@ -26,6 +38,7 @@ On the Q2 (**Streaming → Pocket**):
 - **Podcasts**: your shows; each has its episodes and **Show Options** (update, download new episodes by themselves, delete downloads, unsubscribe, also in Pocket Casts).
 - **Downloaded**, **Downloads**, **Files** (Pocket Casts Plus' uploaded files), **Discover** (Pocket Casts' Trending, Popular and Featured), **Search Podcasts**, **Sleep Timer**.
 - **Ads & Sponsors**: the switches below, what has been cut so far, how much of Up Next stays downloaded, and whether played episodes are deleted.
+- **Star** on Q2 Pod's Now Playing (a Q2 Pod that has it) stars the episode in Pocket Casts.
 - **Sync Now**: syncs at once; it also syncs every three minutes while Pocket runs, and stays on while a podcast plays so your place keeps reaching Pocket Casts.
 
 On the phone page (the QR code): tabs for all of the above. An episode's sheet plays it next or last, takes it out of Up Next, stars it, marks it played or unplayed, downloads it, and shows **what was cut** from it: each cut's times and why. **Settings** has your account, the switches and the optional keys.

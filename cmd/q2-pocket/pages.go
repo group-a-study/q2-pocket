@@ -436,7 +436,10 @@ func (a *app) adfreePage() q2spot.Reply {
 		sb += " (add YouTube or Spotify keys on the phone page)"
 	}
 	upn := "Off"
-	if s.UpNext > 0 {
+	switch {
+	case s.UpNext < 0:
+		upn = "All"
+	case s.UpNext > 0:
 		upn = fmt.Sprintf("The First %d", s.UpNext)
 	}
 	rows := []q2spot.Row{
@@ -455,7 +458,7 @@ func (a *app) adfreePage() q2spot.Reply {
 	return q2spot.Reply{Rows: rows}
 }
 
-var upNextChoices = []int{0, 3, 5, 10, 20, 50}
+var upNextChoices = []int{-1, 0, 3, 5, 10, 20, 50}
 
 func (a *app) setOption(name string) q2spot.Reply {
 	msg := ""
@@ -484,9 +487,13 @@ func (a *app) setOption(name string) q2spot.Reply {
 				}
 			}
 			s.UpNext = next
-			msg = fmt.Sprintf("Up Next: the first %d downloaded", next)
-			if next == 0 {
+			switch {
+			case next < 0:
+				msg = "Up Next: all of it downloaded"
+			case next == 0:
 				msg = "Up Next isn't downloaded"
+			default:
+				msg = fmt.Sprintf("Up Next: the first %d downloaded", next)
 			}
 		}
 	})

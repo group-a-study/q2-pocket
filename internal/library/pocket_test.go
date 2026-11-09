@@ -17,6 +17,7 @@ import (
 	"q2-pocket/internal/feed"
 	"q2-pocket/internal/mp3"
 	"q2-pocket/internal/pocketcasts"
+	"q2-pocket/internal/tag"
 )
 
 func mp3Fixture(t *testing.T, name string) (*mp3.Stream, []byte) {
@@ -57,6 +58,11 @@ func TestPocketShow(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"podcast": map[string]any{"uuid": podUUID, "title": "Machine Gods", "author": "NPR",
 				"episodes": []map[string]any{{"uuid": epUUID, "title": "Tsunami", "url": srv.URL + "/ep.mp3",
 					"file_type": "audio/mpeg", "duration": 12, "published": "2026-11-06T12:00:00Z"}}}})
+		case r.URL.Path == "/cache/mobile/show_notes/full/"+podUUID:
+			json.NewEncoder(w).Encode(map[string]any{"podcast": map[string]any{"uuid": podUUID, "episodes": []map[string]any{
+				{"uuid": epUUID, "show_notes": "<p>Kevin &amp; Casey.</p><p>Links</p>", "chapters_url": srv.URL + "/chapters.json"}}}})
+		case r.URL.Path == "/chapters.json":
+			w.Write([]byte(`{"version":"1.2.0","chapters":[{"startTime":0,"title":"Open"},{"startTime":5,"title":"Talk"}]}`))
 		case r.URL.Path == "/ep.mp3":
 			b := first
 			if strings.Contains(r.UserAgent(), "second copy") {
@@ -117,6 +123,12 @@ func TestPocketShow(t *testing.T) {
 	r := clean.Load(app, e.Key, e.EID)
 	if r == nil || len(r.Cuts) != 1 {
 		t.Errorf("report %+v", r)
+	}
+	if b, err := os.ReadFile(clean.NotesPath(e.Path)); err != nil || !strings.Contains(string(b), "Kevin & Casey.\n\nLinks") {
+		t.Errorf("notes %q %v", b, err)
+	}
+	if h, err := tag.Read(e.Path); err != nil || len(h.Chapters()) != 2 || h.Chapters()[1].Title != "Talk" || h.Chapters()[1].Start != 5000 {
+		t.Errorf("chapters %v", err)
 	}
 	// unsubscribed elsewhere, but in Up Next: hidden, out of the lists, its episode still found
 	l.Hide(si.Key, true)

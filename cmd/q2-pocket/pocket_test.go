@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/pocketcasts"
 	"q2-pocket/internal/q2"
 )
@@ -131,6 +132,7 @@ func startSigned(t *testing.T) (*app, string, *pcFake) {
 	// a sync each time the test asks, not on the loop's clock
 	o := options{dir: dir, card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"),
 		play: filepath.Join(socks, "play"), browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"),
+		star: filepath.Join(socks, "star"), starred: filepath.Join(socks, "starred"),
 		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: func() bool { return true }}
 	a, err := start(o)
 	if err != nil {
@@ -235,6 +237,21 @@ func TestSync(t *testing.T) {
 		t.Errorf("removed from Up Next: %q", removed)
 	}
 
+	// Now Playing's star: the episode starred in Pocket Casts
+	os.WriteFile(a.opts.star, []byte("1\t"+e1.Path+"\n"), 0o644)
+	a.sy.star()
+	for start := time.Now(); len(f.saw("/sync/update_episode_star")) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("no star sent")
+		}
+	}
+	if st := f.saw("/sync/update_episode_star")[0]; st["uuid"] != epA1 || st["star"] != true {
+		t.Errorf("star %v", st)
+	}
+	if _, err := os.Stat(a.opts.star); err == nil {
+		t.Error("the request stayed")
+	}
+
 	// the pages
 	up := spot(t, a, "upnext")
 	if len(up.rows) != 2 || up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[1][4] != "1" || up.rows[0][5] != "unq:"+podA+":"+epA2 {
@@ -328,7 +345,7 @@ func TestPhoneAccount(t *testing.T) {
 }
 
 func TestNotesText(t *testing.T) {
-	got := notesText(`<p>Guest:  <b>Ana</b> &amp; friends.</p><p>Links:<br/><a href="x">site</a></p>`)
+	got := clean.NotesText(`<p>Guest:  <b>Ana</b> &amp; friends.</p><p>Links:<br/><a href="x">site</a></p>`)
 	if want := "Guest: Ana & friends.\n\nLinks:\nsite"; got != want {
 		t.Errorf("%q, want %q", got, want)
 	}

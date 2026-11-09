@@ -12,10 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +45,7 @@ type Settings struct {
 // Episode is what Clean knows of the episode it cleans.
 type Episode struct {
 	Key, EID            string // the library's ids, which name its files here
+	Path                string // where it goes on the card: its notes go beside it (NotesPath)
 	Show, Title, Author string
 	Date                time.Time
 	Duration            int    // seconds, as its feed or Pocket Casts gives it; 0 unknown
@@ -88,11 +91,13 @@ type Report struct {
 	Sources []string  `json:"sources,omitempty"`
 }
 
-// Edit is the frames to leave out of the download, and the stream they are of.
+// Edit is the frames to leave out of the download, and the stream they are of; and the chapters its
+// publisher gives (milliseconds of the episode as cut), for a download without its own.
 type Edit struct {
-	Stream *mp3.Stream
-	Cuts   []mp3.Range
-	Report *Report
+	Stream   *mp3.Stream
+	Cuts     []mp3.Range
+	Report   *Report
+	Chapters []tag.Chapter
 }
 
 const (
@@ -117,6 +122,7 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	defer c.mu.Unlock()
 	set := c.Settings()
 	rep := &Report{Checked: time.Now()}
+	c.keepNotes(ctx, e)
 	if !set.Ads && !set.Sponsors {
 		return nil, nil
 	}
@@ -191,7 +197,80 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	adfree.SaveHashes(c.path("frames", e.Key, e.EID, ".bin"), adfree.FoldAll(s.Hashes()))
 	c.prune()
 	c.save(e, rep)
-	return &Edit{Stream: s, Cuts: ranges, Report: rep}, nil
+	return &Edit{Stream: s, Cuts: ranges, Report: rep, Chapters: c.chapters(ctx, src.chapters, kept)}, nil
+}
+
+// chapters is the episode's published chapters (Podcasting 2.0 JSON) as a tag's, ending at length
+// (seconds); nil without two or more. Publishers time them on the episode without its adverts, which
+// the cut episode is.
+func (c *Cleaner) chapters(ctx context.Context, u string, length float64) []tag.Chapter {
+	if u == "" {
+		return nil
+	}
+	b, err := c.get(ctx, u)
+	if err != nil {
+		return nil
+	}
+	var out []tag.Chapter
+	for _, ch := range sponsor.JSONChapters(b) {
+		if ch.From < 0 || ch.From >= length {
+			continue
+		}
+		k := tag.Chapter{Start: uint32(ch.From * 1000), Title: ch.Title}
+		if ch.To > ch.From {
+			k.End = uint32(math.Min(ch.To, length) * 1000)
+		}
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+// NotesPath is where an episode's show notes are kept, as text: a hidden .notes folder beside it,
+// the episode's name with .txt (Q2 Pod's Now Playing shows them).
+func NotesPath(episode string) string {
+	base := filepath.Base(episode)
+	return filepath.Join(filepath.Dir(episode), ".notes", strings.TrimSuffix(base, filepath.Ext(base))+".txt")
+}
+
+// keepNotes keeps an episode's show notes beside it, from Pocket Casts' show notes.
+func (c *Cleaner) keepNotes(ctx context.Context, e Episode) {
+	if e.Path == "" || e.Podcast == "" || e.UUID == "" || c.PC == nil {
+		return
+	}
+	n, ok := c.showNotes(ctx, e.Podcast)[e.UUID]
+	if !ok || strings.TrimSpace(n.Text) == "" {
+		return
+	}
+	p := NotesPath(e.Path)
+	if os.MkdirAll(filepath.Dir(p), 0o755) == nil {
+		text := e.Title + "\n" + e.Show + "\n\n" + NotesText(n.Text) + "\n"
+		if os.WriteFile(p+".tmp", []byte(text), 0o644) == nil {
+			os.Rename(p+".tmp", p)
+		}
+	}
+}
+
+var (
+	paraEnd = regexp.MustCompile(`(?i)<\s*/(p|div|h[1-6]|ul|ol)\s*>`)
+	lineEnd = regexp.MustCompile(`(?i)<\s*(br\s*/?|/li)\s*>`)
+	anyTag  = regexp.MustCompile(`<[^>]*>`)
+	blanks  = regexp.MustCompile(`[ \t\x{a0}]+`)
+	paras   = regexp.MustCompile(`\s*\n\s*\n\s*`)
+	lines   = regexp.MustCompile(` *\n *`)
+)
+
+// NotesText is show notes' HTML as plain text: paragraphs and lines kept, tags and entities gone.
+func NotesText(s string) string {
+	s = paraEnd.ReplaceAllString(s, "\n\n")
+	s = lineEnd.ReplaceAllString(s, "\n")
+	s = html.UnescapeString(anyTag.ReplaceAllString(s, ""))
+	s = blanks.ReplaceAllString(s, " ")
+	s = paras.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(lines.ReplaceAllString(s, "\n"))
 }
 
 // union is cuts in order, overlapping ones joined (an advert's kind wins).

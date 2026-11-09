@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"html"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -155,7 +153,7 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 			set(&s.Copy, body.Copy)
 			set(&s.DeletePlayed, body.DeletePlayed)
 			if body.UpNext != nil {
-				s.UpNext = min(max(*body.UpNext, 0), 200)
+				s.UpNext = min(max(*body.UpNext, -1), 10000)
 			}
 			for _, kv := range []struct {
 				p *string
@@ -248,7 +246,7 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 			return
 		}
 		n := notes[q.Get("uuid")]
-		out := map[string]any{"text": notesText(n.Text), "link": n.Link}
+		out := map[string]any{"text": clean.NotesText(n.Text), "link": n.Link}
 		if n.ChaptersURL != "" {
 			if b, err := a.pc.Get(ctx, n.ChaptersURL, 1<<20); err == nil {
 				var ch []map[string]any
@@ -315,23 +313,4 @@ func (w *web) pcAction(rw http.ResponseWriter, ctx context.Context, b pcBody) {
 	a.sy.forget()
 	a.sy.kick()
 	reply(rw, http.StatusOK, map[string]string{"message": msg})
-}
-
-var (
-	paraEnd = regexp.MustCompile(`(?i)<\s*/(p|div|h[1-6]|ul|ol)\s*>`)
-	lineEnd = regexp.MustCompile(`(?i)<\s*(br\s*/?|/li)\s*>`)
-	anyTag  = regexp.MustCompile(`<[^>]*>`)
-	blanks  = regexp.MustCompile(`[ \t]+`)
-	paras   = regexp.MustCompile(`\s*\n\s*\n\s*`)
-	lines   = regexp.MustCompile(` *\n *`)
-)
-
-// notesText is show notes' HTML as plain text: paragraphs and lines kept, tags and entities gone.
-func notesText(s string) string {
-	s = paraEnd.ReplaceAllString(s, "\n\n")
-	s = lineEnd.ReplaceAllString(s, "\n")
-	s = html.UnescapeString(anyTag.ReplaceAllString(s, ""))
-	s = blanks.ReplaceAllString(s, " ")
-	s = paras.ReplaceAllString(s, "\n\n")
-	return strings.TrimSpace(lines.ReplaceAllString(s, "\n"))
 }

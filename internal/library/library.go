@@ -1010,7 +1010,9 @@ func (l *Library) Delete(key, eid string) error {
 		return err
 	}
 	clean.Forget(l.o.Dir, key, eid)
-	os.Remove(filepath.Dir(e.Path)) // only when empty
+	os.Remove(clean.NotesPath(e.Path))
+	os.Remove(filepath.Dir(clean.NotesPath(e.Path))) // each only when empty
+	os.Remove(filepath.Dir(e.Path))
 	return nil
 }
 

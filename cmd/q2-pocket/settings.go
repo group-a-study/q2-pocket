@@ -11,7 +11,7 @@ import (
 )
 
 // settings is .pocket/config.json. Missing choices take their defaults: adverts and sponsor reads
-// cut, copies compared, the first 10 of Up Next downloaded, played episodes kept.
+// cut, copies compared, all of Up Next downloaded, played episodes kept.
 type settings struct {
 	Key         string `json:"web_key"`      // the QR code's: signs a browser in
 	PIN         string `json:"pin"`          // the Q2's screen's, typed with the address
@@ -21,7 +21,7 @@ type settings struct {
 	Sponsors     bool `json:"remove_sponsor_reads"`
 	SelfPromo    bool `json:"remove_self_promotion"`
 	Copy         bool `json:"compare_copies"`
-	UpNext       int  `json:"download_up_next"` // the first this many of Up Next stay downloaded (0: none)
+	UpNext       int  `json:"download_up_next"` // Up Next kept downloaded: -1 all, else its first this many
 	DeletePlayed bool `json:"delete_played"`
 
 	YouTubeKey    string `json:"youtube_api_key,omitempty"`
@@ -30,7 +30,7 @@ type settings struct {
 }
 
 func defaults() settings {
-	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: 10}
+	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: -1}
 }
 
 // loadSettings reads config.json, making the key and PIN the first time; they stay, so a phone

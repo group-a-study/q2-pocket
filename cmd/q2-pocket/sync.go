@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,8 @@ const (
 	listenFor   = 3 * time.Minute // the ring written this recently: a podcast is playing
 	playedTail  = 5 * time.Minute // a place this near the end, then gone: played
 	moved       = 15              // seconds a place must move by to be sent
+	newPerSync  = 60              // Up Next episodes new to the library looked up a sync
+	soonAfter   = 20 * time.Second
 )
 
 // syncState is .pocket/sync.json.
@@ -77,6 +80,8 @@ type syncer struct {
 	missed   map[string]time.Time
 	wrote    map[uint32]int // places this app put in the ring: Q2 Pod saving them isn't playing
 	files    *fileList
+	soon     bool   // more to do: the next sync in soonAfter
+	stars    string // /tmp/q2-starred as last written
 }
 
 func newSyncer(a *app) *syncer {
@@ -136,7 +141,7 @@ func (s *syncer) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-s.wake:
-		case <-time.After(syncEvery):
+		case <-time.After(s.wait()):
 		}
 	}
 }
@@ -191,9 +196,10 @@ func (s *syncer) once(ctx context.Context) {
 		return
 	}
 	s.setList("inprog", inprog, nil)
-	s.download(ctx, up)
 	s.places(ctx, inprog)
 	s.nowPlaying(ctx)
+	s.starred(ctx)
+	s.download(ctx, up)
 	s.filePlaces(ctx)
 	s.save()
 	s.mu.Lock()
@@ -298,21 +304,39 @@ func cmpOr(a, b string) string {
 }
 
 // download keeps Up Next's first few episodes downloaded.
+// download keeps Up Next downloaded: all of it (UpNext < 0), or its first UpNext episodes. A sync
+// looks up at most newPerSync episodes the library doesn't have yet (their shows fetched first), and
+// asks for another sync soon while more are left: a long Up Next takes a while, places first.
 func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
-	n := s.a.settings().UpNext
+	n, looked := s.a.settings().UpNext, 0
 	for _, e := range up {
-		if n <= 0 || ctx.Err() != nil {
+		if n == 0 || ctx.Err() != nil {
 			return
 		}
 		if e.Show() == pocketcasts.FilesPodcast {
 			continue
 		}
 		n--
-		ep, err := s.episode(ctx, e)
+		ep, err := s.a.lib.PCEpisode(e.Show(), e.UUID)
+		if err != nil {
+			if looked == newPerSync {
+				s.again()
+				return
+			}
+			looked++
+			ep, err = s.episode(ctx, e)
+		}
 		if err == nil && !ep.OnCard && ep.Job == nil {
 			s.a.lib.DL.Queue(ep.Key, ep.EID)
 		}
 	}
+}
+
+// again asks for the next sync soon, not on syncEvery's clock.
+func (s *syncer) again() {
+	s.mu.Lock()
+	s.soon = true
+	s.mu.Unlock()
 }
 
 // asServed is an episode of the library as Pocket Casts' calls take it.
@@ -346,7 +370,8 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 		asked := map[string]bool{}
 		for _, e := range eps {
 			id := e.Key + ":" + e.EID
-			if e.PC == "" || asked[e.PC] || s.st.Eps[id] != nil && s.st.Eps[id].Done {
+			_ = id
+			if e.PC == "" || asked[e.PC] {
 				continue
 			}
 			asked[e.PC] = true
@@ -362,7 +387,7 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 		s.statesAt = time.Now()
 		s.mu.Unlock()
 	}
-	pull := map[string]int{}
+	pulls := map[string]int{}
 	pulled := map[string]*epSync{} // by path: their Q2 place set only once Q2 Pod takes it
 	for _, e := range eps {
 		if e.PC == "" || e.Feed.PC == "" {
@@ -374,42 +399,53 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 		srv, known := server[e.Feed.PC]
 		s.mu.Lock()
 		st := s.st.Eps[id]
-		if st == nil { // first seen: the Q2's place stands, if it has one
-			st = &epSync{Q2: -1, PC: srv.PlayedUpTo}
+		if st == nil { // new to the sync: neither side's place seen yet
+			st = &epSync{Q2: -1, PC: -1}
 			s.st.Eps[id] = st
 		}
 		s.mu.Unlock()
-		switch {
-		case q != st.Q2 && q > 0: // played on the Q2: sent, as served
-			orig := int(r.Original(float64(q)))
-			if abs(orig-st.PC) >= moved || st.Q2 < 0 {
-				if pc.SetPlace(ctx, e.PC, e.Feed.PC, orig) == nil {
-					st.PC = orig
-				}
+		served := func(sec int) int { // a ring place as Pocket Casts counts it
+			if sec <= 0 {
+				return sec
 			}
-			st.Q2, st.Done = q, false
-		case q == 0 && st.Q2 > 0 && float64(st.Q2) >= cutLength(r, e)-playedTail.Seconds(): // gone near the end: played
+			return int(r.Original(float64(sec)))
+		}
+		v := side{Q2: served(q), Q2Was: served(st.Q2), PC: srv.PlayedUpTo, PCWas: st.PC, Status: srv.Status,
+			Known: known, Done: st.Done, NearEnd: st.Q2 > 0 && float64(st.Q2) >= cutLength(r, e)-playedTail.Seconds()}
+		what, at := decide(v)
+		switch what {
+		case push:
+			if pc.SetPlace(ctx, e.PC, e.Feed.PC, at) == nil {
+				st.Q2, st.PC, st.Done = q, at, false
+			}
+		case pull:
+			pulls[e.Path], pulled[e.Path] = int(r.Kept(float64(at))), st
+			st.Q2, st.PC, st.Done = q, at, false
+		case played:
 			if pc.SetStatus(ctx, e.PC, e.Feed.PC, pocketcasts.Played) == nil {
 				pc.UpNextRemove(ctx, e.Feed.PC)
-				st.Done, st.Q2 = true, 0
+				st.Q2, st.Done = 0, true
+				if known {
+					st.PC = srv.PlayedUpTo
+				}
 				s.played(e)
 			}
-		case q == 0 && st.Q2 > 0: // forgotten near its start: begun again
-			st.Q2 = 0
-		case known && srv.Status == pocketcasts.Played && !st.Done: // played elsewhere
-			st.Done = true
-			if q > 0 {
-				pull[e.Path], pulled[e.Path] = 0, st
+		case forget:
+			pulls[e.Path], pulled[e.Path] = 0, st
+			st.Q2, st.PC, st.Done = q, srv.PlayedUpTo, srv.Status == pocketcasts.Played
+			if st.Done {
+				s.played(e)
 			}
-			s.played(e)
-		case known && srv.PlayedUpTo > 0 && srv.Status != pocketcasts.Played && abs(srv.PlayedUpTo-st.PC) >= moved: // moved elsewhere
-			pull[e.Path], pulled[e.Path] = int(r.Kept(float64(srv.PlayedUpTo))), st
-			st.PC = srv.PlayedUpTo
+		case settle:
+			st.Q2 = q
+			if known {
+				st.PC, st.Done = srv.PlayedUpTo, srv.Status == pocketcasts.Played
+			}
 		}
 	}
-	if len(pull) > 0 && s.a.setPlaces(pull) {
+	if len(pulls) > 0 && s.a.setPlaces(pulls) {
 		s.mu.Lock()
-		for p, sec := range pull {
+		for p, sec := range pulls {
 			s.wrote[placeKey(p)] = sec
 			pulled[p].Q2 = sec
 		}
@@ -586,3 +622,75 @@ func (s *syncer) dropFiles() {
 
 // roundMin is seconds as whole minutes, for a row.
 func roundMin(sec float64) int { return int(math.Round(sec / 60)) }
+
+// wait is how long until the next sync: soonAfter when one left work over, else syncEvery.
+func (s *syncer) wait() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.soon {
+		s.soon = false
+		return soonAfter
+	}
+	return syncEvery
+}
+
+// The firmware's star (Q2 Pod's Now Playing): it asks for a downloaded episode to be starred or not
+// in /tmp/q2-star, "<1|0>\t<path>", and shows the star from /tmp/q2-starred, the paths of the
+// downloaded episodes Pocket Casts has starred.
+
+// starred writes /tmp/q2-starred from the account's Starred list.
+func (s *syncer) starred(ctx context.Context) {
+	eps, err := s.a.pc.Starred(ctx)
+	if err != nil {
+		return
+	}
+	s.setList("starred", eps, nil)
+	s.writeStarred(eps)
+}
+
+func (s *syncer) writeStarred(eps []pocketcasts.Episode) {
+	var b strings.Builder
+	for _, e := range eps {
+		if ep, err := s.a.lib.PCEpisode(e.Show(), e.UUID); err == nil && ep.OnCard {
+			b.WriteString(ep.Path + "\n")
+		}
+	}
+	s.mu.Lock()
+	same := b.String() == s.stars
+	s.stars = b.String()
+	s.mu.Unlock()
+	if !same {
+		q2.WriteFile(s.a.opts.starred, []byte(b.String()))
+	}
+}
+
+// star takes the firmware's request, if there is one: the episode starred or not, at once.
+func (s *syncer) star() {
+	b, err := os.ReadFile(s.a.opts.star)
+	if err != nil {
+		return
+	}
+	os.Remove(s.a.opts.star)
+	on, path, ok := strings.Cut(strings.TrimSpace(string(b)), "\t")
+	if !ok || !s.a.pc.SignedIn() {
+		return
+	}
+	eps, _ := s.a.lib.Downloaded()
+	for _, e := range eps {
+		if e.Path != path || e.PC == "" || e.Feed.PC == "" {
+			continue
+		}
+		go func(e library.EpisodeInfo) {
+			ctx, cancel := context.WithTimeout(s.a.ctx, 30*time.Second)
+			defer cancel()
+			if s.a.pc.Star(ctx, e.PC, e.Feed.PC, on == "1") != nil {
+				return
+			}
+			if eps, err := s.a.pc.Starred(ctx); err == nil {
+				s.setList("starred", eps, nil)
+				s.writeStarred(eps)
+			}
+		}(e)
+		return
+	}
+}

@@ -44,6 +44,7 @@ type options struct {
 	resume                                 string // Q2 Pod's places in what it played (resume.go)
 	sleep                                  string // the Sleep Timer's request to Q2 Pod (sleep.go)
 	places, play                           string // places for Q2 Pod's resume ring (sync.go), and Up Next to play (pages.go)
+	star, starred                          string // Now Playing's star asked for, and the starred episodes (sync.go)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
 }
@@ -94,6 +95,8 @@ func main() {
 	flag.StringVar(&o.sleep, "sleep-file", "/tmp/q2-pocket.sleep", "the Sleep Timer's request to Q2 Pod")
 	flag.StringVar(&o.places, "places-file", "/tmp/q2-pocket.places", "places for Q2 Pod's resume ring")
 	flag.StringVar(&o.play, "play-file", "/tmp/q2-pocket.play", "a playlist for Q2 Pod to play")
+	flag.StringVar(&o.star, "star-file", "/tmp/q2-star", "Now Playing's star, asked for")
+	flag.StringVar(&o.starred, "starred-file", "/tmp/q2-starred", "the downloaded episodes starred")
 	flag.StringVar(&o.browse, "browse-socket", "/tmp/q2-pocket.browse.sock", "Q2SPOT/1 for the Q2's page")
 	flag.StringVar(&o.control, "control-socket", "/tmp/q2-pocket.sock", "datagrams: q quits")
 	flag.IntVar(&o.port, "port", 8100, "the phone page's port (the next free one if taken)")
@@ -234,6 +237,7 @@ func (a *app) run() {
 			return
 		case <-t.C:
 			a.writeState()
+			a.sy.star()
 			s := a.settings()
 			if a.sy.listening() { // a podcast playing: its place is synced, so stay
 				a.touch(false)

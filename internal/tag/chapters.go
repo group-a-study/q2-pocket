@@ -3,6 +3,7 @@ package tag
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
 // Retime moves the tag's chapters (CHAP frames) to where m puts their times, in milliseconds, after
@@ -147,4 +148,40 @@ func textOf(b []byte) string {
 		r = append(r, rune(c))
 	}
 	return string(r)
+}
+
+// AddChapters gives a tag that has no chapters these, as CHAP frames (each with its title) under a
+// table of contents (CTOC); a chapter without an end ends where the next starts, the last at end
+// (milliseconds). false when the tag has chapters already, or fewer than two are given.
+func (h *Head) AddChapters(chs []Chapter, end uint32) bool {
+	if h.has["CHAP"] || len(chs) < 2 {
+		return false
+	}
+	toc := append([]byte("toc\x00"), 0x03, byte(min(len(chs), 255))) // top level, ordered
+	for i := range chs[:min(len(chs), 255)] {
+		toc = append(toc, fmt.Sprintf("ch%d\x00", i)...)
+	}
+	h.frames = append(h.frames, h.frame("CTOC", toc))
+	for i, c := range chs[:min(len(chs), 255)] {
+		to := c.End
+		if to <= c.Start {
+			to = end
+			if i+1 < len(chs) {
+				to = chs[i+1].Start
+			}
+		}
+		b := append([]byte(fmt.Sprintf("ch%d", i)), 0)
+		t := make([]byte, 16)
+		binary.BigEndian.PutUint32(t, c.Start)
+		binary.BigEndian.PutUint32(t[4:], to)
+		binary.BigEndian.PutUint32(t[8:], 0xffffffff)
+		binary.BigEndian.PutUint32(t[12:], 0xffffffff)
+		b = append(b, t...)
+		if c.Title != "" {
+			b = append(b, h.frame("TIT2", h.text(c.Title))...)
+		}
+		h.frames = append(h.frames, h.frame("CHAP", b))
+	}
+	h.has["CHAP"], h.has["CTOC"] = true, true
+	return true
 }

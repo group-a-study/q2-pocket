@@ -113,13 +113,17 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 	if err != nil || ctx.Err() != nil {
 		return cmp.Or(ctx.Err(), err)
 	}
-	if ed == nil || len(ed.Cuts) == 0 {
+	if ed == nil || len(ed.Cuts) == 0 && len(ed.Chapters) == 0 {
 		return errUncut
 	}
-	note("Cutting the ads out")
+	if len(ed.Cuts) > 0 {
+		note("Cutting the ads out")
+	}
 	var head []byte
 	if h, err := tag.Read(part); err == nil && !h.Big() {
 		h.Retime(func(ms uint32) uint32 { return uint32(ed.Report.Kept(float64(ms)/1000) * 1000) })
+		_, _, cut := ed.Report.Removed()
+		h.AddChapters(ed.Chapters, uint32((ed.Report.Length-cut)*1000)) // the publisher's, when it has none
 		var cover []byte
 		if !h.HasCover() {
 			cover = l.cover(ctx, e.Image)
@@ -151,7 +155,7 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 // cleanEpisode is an episode as the cleaner takes it.
 func cleanEpisode(e EpisodeInfo) clean.Episode {
 	f := e.Feed
-	return clean.Episode{Key: e.Key, EID: e.EID, Show: e.Show, Title: e.Title, Author: e.Author, Date: e.Date,
+	return clean.Episode{Key: e.Key, EID: e.EID, Path: e.Path, Show: e.Show, Title: e.Title, Author: e.Author, Date: e.Date,
 		Duration: e.Duration, URL: f.URL, Podcast: e.PC, UUID: f.PC, Transcript: f.Transcript,
 		TranscriptType: f.TranscriptType, Chapters: f.Chapters, Links: f.Links}
 }

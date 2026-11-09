@@ -7,6 +7,7 @@ package pocketcasts
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -77,4 +78,45 @@ func TestAccountRead(t *testing.T) {
 	c.mu.Unlock()
 	_, err = c.Podcasts(ctx)
 	t.Logf("after a refused session: %v, refreshed and saved %v", err, saved)
+}
+
+func TestAccountFields(t *testing.T) {
+	b, _ := os.ReadFile(os.Getenv("PC_TOKEN"))
+	var tok Token
+	json.Unmarshal(b, &tok)
+	c := New(&http.Client{Timeout: 30 * time.Second}, "Q2Pocket/0.1", tok)
+	c.Saved = func(nt Token) { b, _ := json.Marshal(nt); os.WriteFile(os.Getenv("PC_TOKEN"), b, 0o600) }
+	ctx := context.Background()
+	keys := func(path string, body any) {
+		var r map[string]any
+		if err := c.call(ctx, http.MethodPost, path, body, &r); err != nil {
+			t.Logf("%s: %v", path, err)
+			return
+		}
+		eps, _ := r["episodes"].([]any)
+		if len(eps) == 0 {
+			t.Logf("%s: none", path)
+			return
+		}
+		e := eps[0].(map[string]any)
+		var ks []string
+		for k, v := range e {
+			if strings.Contains(strings.ToLower(k), "modif") || strings.Contains(strings.ToLower(k), "at") || k == "playedUpTo" || k == "playingStatus" {
+				ks = append(ks, k+"="+strings.TrimSpace(fmt.Sprint(v))[:min(20, len(fmt.Sprint(v)))])
+			} else {
+				ks = append(ks, k)
+			}
+		}
+		t.Logf("%s: %v", path, ks)
+	}
+	keys("/user/in_progress", map[string]any{})
+	pods, _ := c.Podcasts(ctx)
+	for _, p := range pods[:min(len(pods), 5)] {
+		var r map[string]any
+		c.call(ctx, http.MethodPost, "/user/podcast/episodes", map[string]string{"uuid": p.UUID}, &r)
+		if eps, _ := r["episodes"].([]any); len(eps) > 0 {
+			keys("/user/podcast/episodes", map[string]string{"uuid": p.UUID})
+			break
+		}
+	}
 }

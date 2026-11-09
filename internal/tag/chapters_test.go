@@ -62,3 +62,17 @@ func TestChapters(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+func TestAddChapters(t *testing.T) {
+	h := &Head{version: 3, has: map[string]bool{}}
+	if !h.AddChapters([]Chapter{{0, 0, "Intro"}, {65000, 0, "Sponsor: Acme"}, {130000, 0, "The interview"}}, 900000) {
+		t.Fatal("not added")
+	}
+	c := h.Chapters()
+	if len(c) != 3 || c[0].End != 65000 || c[2].Start != 130000 || c[2].End != 900000 || c[1].Title != "Sponsor: Acme" {
+		t.Errorf("%+v", c)
+	}
+	if h.AddChapters([]Chapter{{0, 0, "a"}, {1, 0, "b"}}, 2) {
+		t.Error("added over chapters it had")
+	}
+}
