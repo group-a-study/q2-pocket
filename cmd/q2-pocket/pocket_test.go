@@ -95,6 +95,8 @@ func newPC(t *testing.T) (*pcFake, *httptest.Server) {
 			reply(map[string]any{})
 		case "/user/in_progress":
 			reply(map[string]any{"episodes": f.inprog})
+		case "/user/new_releases":
+			reply(map[string]any{"episodes": []map[string]any{ep(epA3, "Episode 3")}})
 		case "/cache/podcast/full/" + podA:
 			eps := []map[string]any{}
 			for i, id := range []string{epA3, epA2, epA1} {
@@ -466,5 +468,23 @@ func TestLeftUpNext(t *testing.T) {
 	a.sy.once(ctx)
 	if got := strings.Join(eids(), ","); got != epA1+","+epA3 {
 		t.Fatalf("after it left Up Next: %s", got)
+	}
+}
+
+// New Releases: how many, and Play/Pause held on one puts it first in Up Next (play_next).
+func TestNewReleasesFirst(t *testing.T) {
+	a, _, f := startSigned(t)
+	var page answer
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if page = spot(t, a, "new"); len(page.rows) == 2 || time.Now().After(end) {
+			break
+		}
+	}
+	if len(page.rows) != 2 || page.rows[0][2] != "1 new episode" || page.rows[1][2] != "Episode 3" {
+		t.Fatalf("New Releases: %v", page.rows)
+	}
+	spot(t, a, "upf:"+podA+":"+epA3)
+	if put := f.saw("/up_next/play_next"); len(put) != 1 || put[0]["episode"].(map[string]any)["uuid"] != epA3 {
+		t.Fatalf("play_next: %v", put)
 	}
 }

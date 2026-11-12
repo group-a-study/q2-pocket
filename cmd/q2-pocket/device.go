@@ -301,6 +301,9 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 	if id, ok := strings.CutPrefix(req.Op, "upq:"); ok { // Play/Pause held: into Up Next
 		return a.upNextAdd(id)
 	}
+	if id, ok := strings.CutPrefix(req.Op, "upf:"); ok { // held on New Releases: first in Up Next
+		return a.upNextFirst(id)
+	}
 	if id, ok := strings.CutPrefix(req.Op, "unq:"); ok { // held twice in Up Next: out of it
 		return a.upNextRemove(id)
 	}
@@ -342,7 +345,7 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		for _, op := range []string{"menu", "shows", "show", "opts", "latest", "downloaded", "downloads", "search",
 			"preview", "get", "cancel", "del", "sub", "refresh", "refresh1", "auto", "getlatest", "wipe", "unsub",
 			"retryall", "cancelall", "stop", "sleep", "setsleep", "upnext", "inprog", "new", "starred", "history",
-			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "unq", "upplay",
+			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "upf", "unq", "upplay",
 			"dlall", "stopafter", "resume"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}

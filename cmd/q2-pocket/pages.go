@@ -25,8 +25,9 @@ import (
 // Discover's lists; and Ads & Sponsors, the cleaning's settings and what it has cut.
 //
 // Ops: upnext, inprog, new, starred, history [cursor]; discover; dlist <name>; dshow <uuid>;
-// adfree; files. Actions: pcget <podcast:uuid>; upq:<podcast>:<uuid> (held); unq:<podcast>:<uuid>
-// (held twice); upplay <index>; dsub <uuid>; set <name>; sync; fget <uuid>.
+// adfree; files. Actions: pcget <podcast:uuid>; upq:<podcast>:<uuid> (held: the end of Up Next);
+// upf:<podcast>:<uuid> (held on New Releases: first in Up Next);
+// unq:<podcast>:<uuid> (held twice); upplay <index>; dsub <uuid>; set <name>; sync; fget <uuid>.
 
 var listNames = map[string]string{"inprog": "In Progress", "new": "New Releases", "starred": "Starred", "history": "History"}
 
@@ -213,7 +214,15 @@ func (a *app) listPage(name string, off int) q2spot.Reply {
 	if len(eps) == 0 {
 		return q2spot.Reply{Rows: []q2spot.Row{info("Nothing here", listNames[name]+" is empty")}}
 	}
-	rows, next := a.pcPage(eps, off, func(e pocketcasts.Episode) string { return "upq:" + pcID(e) }, "album")
+	hold := "upq:" // Play/Pause held: the end of Up Next
+	if name == "new" {
+		hold = "upf:" // on New Releases: first in Up Next
+	}
+	rows, next := a.pcPage(eps, off, func(e pocketcasts.Episode) string { return hold + pcID(e) }, "album")
+	if name == "new" && off == 0 { // how many, and the hold (More… pages through the rest: q2spot.MaxRows)
+		hint := info(plural(len(eps), "new episode"), "Hold Play/Pause on one to put it first in Up Next")
+		rows = append([]q2spot.Row{hint}, rows...)
+	}
 	return live(rows, next, loading || a.anyMoving(eps))
 }
 
@@ -273,14 +282,21 @@ func (a *app) pcGet(id string) q2spot.Reply {
 }
 
 // upNextAdd puts an episode at the end of Up Next.
-func (a *app) upNextAdd(id string) q2spot.Reply {
+func (a *app) upNextAdd(id string) q2spot.Reply { return a.upNextPut(id, "last") }
+
+// upNextFirst puts an episode first in Up Next, after the one playing (New Releases' hold), moving it
+// there if it is in Up Next already.
+func (a *app) upNextFirst(id string) q2spot.Reply { return a.upNextPut(id, "next") }
+
+// upNextPut is an episode put in Up Next: where is "last" or "next" (pocketcasts.UpNextAdd).
+func (a *app) upNextPut(id, where string) q2spot.Reply {
 	if !a.pc.SignedIn() {
 		return q2spot.Fail(q2spot.Login, "Sign in to Pocket Casts first")
 	}
 	up, _ := a.sy.upNext()
 	_, uuid, _ := strings.Cut(id, ":")
-	for _, e := range up {
-		if e.UUID == uuid {
+	for i, e := range up {
+		if e.UUID == uuid && (where == "last" || i <= 1) { // first already: after the one playing, or it
 			return q2spot.Reply{Message: "It's in Up Next already"}
 		}
 	}
@@ -290,10 +306,13 @@ func (a *app) upNextAdd(id string) q2spot.Reply {
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 12*time.Second)
 	defer cancel()
-	if err := a.pc.UpNextAdd(ctx, "last", e); err != nil {
+	if err := a.pc.UpNextAdd(ctx, where, e); err != nil {
 		return q2spot.Fail(q2spot.Offline, say(err))
 	}
 	a.sy.kick()
+	if where == "next" {
+		return q2spot.Reply{Message: "First in Up Next"}
+	}
 	return q2spot.Reply{Message: "Added to Up Next"}
 }
 
