@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -48,6 +49,10 @@ type syncState struct {
 	All      bool               `json:"download_all,omitempty"`   // Download All: the rest of Up Next still to be asked for
 	Held     bool               `json:"downloads_held,omitempty"` // Stop After This One: Up Next isn't downloaded by itself
 	Scripts  map[string]bool    `json:"transcripts,omitempty"`    // episodes on the card whose transcript was looked for
+	// Up Next's downloads: those a sync asked for, by "<key>:<eid>", each its Pocket Casts id. One
+	// whose episode has left Up Next (taken off in Pocket Casts) is cancelled.
+	Queued map[string]string `json:"up_next_downloads,omitempty"`
+	Owned  bool              `json:"up_next_owned,omitempty"` // the queue an older version left taken as Up Next's
 }
 
 // epSync is an episode's place as last seen on both sides.
@@ -87,6 +92,7 @@ type syncer struct {
 	soon     bool   // more to do: the next sync in soonAfter
 	stars    string // /tmp/q2-starred as last written
 	starsOut bool   // written since the start or the last sign-out: the firmware's heart is the star
+	tried    bool   // a sync has run to Up Next's downloads (or failed) since the start: they may go
 }
 
 func newSyncer(a *app) *syncer {
@@ -152,6 +158,7 @@ func (s *syncer) run(ctx context.Context) {
 }
 
 func (s *syncer) fail(err error) {
+	logf("sync failed: %v", err)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failAt = time.Now()
@@ -175,6 +182,7 @@ func (s *syncer) once(ctx context.Context) {
 		s.mu.Lock()
 		s.busy = false
 		s.mu.Unlock()
+		s.letDownloads()
 	}()
 	pc := s.a.pc
 	if subsDue {
@@ -210,9 +218,74 @@ func (s *syncer) once(ctx context.Context) {
 	s.mu.Lock() // the account and the Q2 agree: synced (the app opens on it, menu)
 	s.at, s.err = time.Now(), ""
 	s.mu.Unlock()
+	logf("synced: %d in Up Next, %d in progress", len(up), len(inprog))
 	s.download(ctx, up)
+	s.letDownloads()
 	s.transcripts(ctx)
 	s.save()
+}
+
+// firstSyncWait is how long downloads wait at most for a start's first sync.
+const firstSyncWait = 2 * time.Minute
+
+// holding is whether downloads wait for this start's first sync, so an episode taken off Up Next in
+// Pocket Casts is cancelled before it starts (one that crashes the app among them): signed in, at
+// most firstSyncWait after the start.
+func (s *syncer) holding() bool {
+	s.mu.Lock()
+	tried := s.tried
+	s.mu.Unlock()
+	return !tried && s.a.pc.SignedIn() && time.Since(started) < firstSyncWait
+}
+
+// letDownloads ends holding: this start's first sync has come to Up Next's downloads, or failed.
+func (s *syncer) letDownloads() {
+	s.mu.Lock()
+	was := s.tried
+	s.tried = true
+	s.mu.Unlock()
+	if !was {
+		s.a.lib.DL.Wake()
+	}
+}
+
+// leftUpNext cancels Up Next's downloads whose episodes aren't in it any more (taken off in Pocket
+// Casts, or played there), and forgets those done. The first time, the queue an older version left is
+// taken as Up Next's: it only ever queued Up Next by itself.
+func (s *syncer) leftUpNext(up []pocketcasts.Episode) {
+	lib := s.a.lib
+	in := map[string]bool{}
+	for _, e := range up {
+		in[e.UUID] = true
+	}
+	s.mu.Lock()
+	if s.st.Queued == nil {
+		s.st.Queued = map[string]string{}
+	}
+	if !s.st.Owned {
+		s.st.Owned = true
+		for _, j := range lib.DL.Jobs() {
+			if ep, err := lib.Episode(j.Key, j.EID); err == nil && ep.PC != "" && ep.Feed.PC != "" {
+				s.st.Queued[j.Key+":"+j.EID] = ep.Feed.PC
+			}
+		}
+	}
+	queued := maps.Clone(s.st.Queued)
+	s.mu.Unlock()
+	for id, uuid := range queued {
+		key, eid, _ := strings.Cut(id, ":")
+		j := lib.DL.Job(key, eid)
+		if j != nil && in[uuid] {
+			continue
+		}
+		if j != nil {
+			lib.DL.Cancel(key, eid)
+			logf("download %q: taken off Up Next in Pocket Casts: cancelled", j.Title)
+		}
+		s.mu.Lock()
+		delete(s.st.Queued, id)
+		s.mu.Unlock()
+	}
 }
 
 // subscriptions makes the shows the account's: a show subscribed by its feed is found in Pocket
@@ -316,6 +389,7 @@ func cmpOr(a, b string) string {
 // most newPerSync episodes the library doesn't have yet (their shows fetched first), and asks for
 // another sync soon while more are left: a long Up Next takes a while, places first.
 func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
+	s.leftUpNext(up)
 	n, looked, all := s.a.settings().UpNext, 0, s.allPending()
 	if all {
 		n = -1
@@ -341,6 +415,9 @@ func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
 		}
 		if err == nil && !ep.OnCard && ep.Job == nil {
 			s.a.lib.DL.Queue(ep.Key, ep.EID)
+			s.mu.Lock()
+			s.st.Queued[ep.Key+":"+ep.EID] = e.UUID
+			s.mu.Unlock()
 		}
 	}
 	if all && ctx.Err() == nil { // every episode of Up Next asked for: Download All is done

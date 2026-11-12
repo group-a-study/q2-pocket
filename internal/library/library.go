@@ -42,14 +42,26 @@ const (
 )
 
 type Options struct {
-	Dir    string              // the app's folder on the card
-	Root   string              // where episodes go: the card's Podcasts folder
-	Client *http.Client        // feeds and the directory: with a total timeout
-	Fetch  *http.Client        // episodes: no total timeout, stalls watched instead
-	Agent  string              // User-Agent
-	Ready  func() bool         // downloads may run (Wi-Fi up, the card there); nil checks both
-	PC     *pocketcasts.Client // Pocket Casts: its shows' episodes come from its cache; nil for none
-	Clean  *clean.Cleaner      // cuts adverts and sponsor reads from each download; nil for none
+	Dir    string                           // the app's folder on the card
+	Root   string                           // where episodes go: the card's Podcasts folder
+	Client *http.Client                     // feeds and the directory: with a total timeout
+	Fetch  *http.Client                     // episodes: no total timeout, stalls watched instead
+	Agent  string                           // User-Agent
+	Ready  func() bool                      // downloads may run (Wi-Fi up, the card there); nil checks both
+	PC     *pocketcasts.Client              // Pocket Casts: its shows' episodes come from its cache; nil for none
+	Clean  *clean.Cleaner                   // cuts adverts and sponsor reads from each download; nil for none
+	Log    func(format string, args ...any) // the debug log's lines (downloads); nil for none
+	// Crashed: the app's last run ended in a crash (its launcher saw it fail), so a download under
+	// way then is counted a try; without it, one under way ended with the app (stopped, the Q2
+	// switched off) and is not
+	Crashed bool
+	Hold    func() bool // downloads wait while it is true (the app's first sync); nil never
+}
+
+func (l *Library) logf(format string, args ...any) {
+	if l.o.Log != nil {
+		l.o.Log(format, args...)
+	}
 }
 
 type Show struct {

@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.1"
+const version = "q2-v1.2"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -49,6 +49,7 @@ type options struct {
 	open                                   string // Q2 Podcast's note of the Q2's page opening (device)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
+	crashed                                bool        // the last run ended in a crash, as its launcher saw
 }
 
 type app struct {
@@ -110,18 +111,26 @@ func main() {
 	flag.StringVar(&o.control, "control-socket", "/tmp/q2-pocket.sock", "datagrams: q quits")
 	flag.IntVar(&o.port, "port", 8100, "the phone page's port (the next free one if taken)")
 	flag.Parse()
+	logPath = filepath.Join(o.card, "q2-pocket.log")
 	debug.SetGCPercent(50)
-	debug.SetMemoryLimit(48 << 20)
+	// a soft limit the GC keeps to by working harder: checking a four-hour episode for ads peaks at
+	// 38 MB under it (48 MB under 48 MB), measured on a 32-bit build
+	debug.SetMemoryLimit(32 << 20)
 	// q2.Card stays the Q2's mount point (/mnt/mmc), whatever -card says: its writes check that the
 	// card is mounted there, which a folder given for a run on a computer never is.
+	before := takeErrFile()
+	o.crashed = crashedBefore(before)
 	a, err := start(o)
 	if err != nil {
+		logf("couldn't start: %v", err)
 		os.Exit(1) // the launcher tries again
 	}
+	logStart(a, before)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	go func() { <-sig; a.shutdown() }()
+	go func() { s := <-sig; logf("signal %v: stopping", s); a.shutdown() }()
 	a.run()
+	logf("stopped")
 	os.Exit(0)
 }
 
@@ -174,16 +183,20 @@ func start(o options) (*app, error) {
 	var a *app
 	cl := &clean.Cleaner{Dir: o.dir, Fetch: &http.Client{Transport: tlsroots.Transport(), Timeout: 30 * time.Minute},
 		API: &http.Client{Transport: feeds, Timeout: 60 * time.Second}, Agent: agent, PC: pc,
-		Settings: func() clean.Settings { return a.cleanSettings() }}
+		Settings: func() clean.Settings { return a.cleanSettings() },
+		Free:     memFree, Log: logMem}
 	lib, err := library.Open(library.Options{
-		Dir:    o.dir,
-		Root:   filepath.Join(o.card, "Podcasts"),
-		Client: &http.Client{Transport: feeds, Timeout: 60 * time.Second},
-		Fetch:  &http.Client{Transport: tlsroots.Transport()},
-		Agent:  agent,
-		Ready:  o.ready,
-		PC:     pc,
-		Clean:  cl,
+		Dir:     o.dir,
+		Root:    filepath.Join(o.card, "Podcasts"),
+		Client:  &http.Client{Transport: feeds, Timeout: 60 * time.Second},
+		Fetch:   &http.Client{Transport: tlsroots.Transport()},
+		Agent:   agent,
+		Ready:   o.ready,
+		PC:      pc,
+		Clean:   cl,
+		Log:     logMem,
+		Crashed: o.crashed,
+		Hold:    func() bool { return a.sy.holding() },
 	})
 	if err != nil {
 		return nil, err
@@ -205,6 +218,7 @@ func start(o options) (*app, error) {
 	go q2spot.Serve(o.browse, a.device)
 	q2.Control(o.control, func(cmd []byte) {
 		if len(cmd) > 0 && cmd[0] == 'q' {
+			logf("Q2 Pod asked it to quit: stopping")
 			a.shutdown()
 		}
 	})
@@ -250,6 +264,7 @@ func (a *app) run() {
 			if time.Since(a.rescanAt) >= rescanEvery {
 				a.rescanAt = time.Now()
 				a.rescan()
+				logMemory(a)
 			}
 			s := a.settings()
 			if a.sy.listening() { // a podcast playing: its place is synced, so stay
@@ -259,6 +274,7 @@ func (a *app) run() {
 			idle := time.Since(a.used)
 			a.mu.Unlock()
 			if s.IdleMinutes > 0 && idle > time.Duration(s.IdleMinutes)*time.Minute && !a.working() {
+				logf("unused for %v with nothing to download: stopping", idle.Round(time.Second))
 				a.shutdown()
 			}
 		}

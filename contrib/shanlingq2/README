@@ -12,7 +12,8 @@ Q2 awake while it downloads. Nothing is flashed for it.
                ELF flag the Q2's kernel requires and Go doesn't, and writes the ZIP (from
                q2-filebrowser)
   launcher.sh  installed as .pocket/run: q2-pocket copied to /tmp and run there at nice 10 in a
-               restart loop
+               restart loop; its stderr and exit codes go to /tmp/q2-pocket.err, its own notes to
+               q2-pocket.log at the card's root (the debug log)
   q2app        installed as .pocket/q2app: the card app manifest (name=Pocket, search=Search
                Podcasts, qr=0: the QR code opens from a row, not at every start)
   icon.png, icon-40.png

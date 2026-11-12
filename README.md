@@ -37,6 +37,7 @@ On the Q2 (**Streaming → Pocket**):
 - **Up Next**, **In Progress**, **New Releases**, **Starred**, **History**: press an episode to download it, or, once it is on the Q2, to play it (in Up Next, on through Up Next in order). Up Next starts with **Download All**: press it twice to download every episode in Up Next not on the Q2 yet (press it again to stop asking for more). **Hold Play/Pause** on an episode to add it to the end of Up Next; in Up Next, hold it twice to take an episode out.
 - **Podcasts**: your shows; each has its episodes and **Show Options** (update, download new episodes by themselves, delete downloads, unsubscribe, also in Pocket Casts).
 - **Downloaded**, **Downloads**, **Files** (Pocket Casts Plus' uploaded files), **Discover** (Pocket Casts' Trending, Popular and Featured), **Search Podcasts**, **Sleep Timer**. **Downloads** starts with **Stop After This One**: the download under way finishes, every waiting one is cancelled, and Up Next isn't downloaded by itself again until **Resume Downloads** (or **Download All**).
+- **Downloads follow Up Next.** An episode Pocket downloaded because it was in Up Next is cancelled once you take it out of Up Next in Pocket Casts, and after each start nothing downloads until Pocket has synced (two minutes at most), so a removal counts first. An episode Pocket crashes on (its launcher sees the crash) goes after the others, and after four crashes it is skipped as failed (**Try Failed Again** on Downloads starts it over); stopping Pocket or switching the Q2 off mid-download doesn't count. A fault while handling one episode fails only that episode.
 - Signed in, Pocket syncs with Pocket Casts every time you open it (Q2 Podcast says when its page opens; on Q2 Pod, an opening after 45 s away), and shows **Syncing with Pocket Casts…** until that sync has worked (or why it couldn't, with **Try Again**), so what you see is what Pocket Casts has.
 - **Ads & Sponsors**: the switches below, what has been cut so far, how much of Up Next stays downloaded (the first 10 unless you choose otherwise: Off, 3, 5, 10, 20, 50 or all of it), and whether played episodes are deleted.
 - On [Q2 Podcast](https://github.com/group-a-study/q2-podcast), Q2 Pod made for podcasts: Now Playing's heart is the episode's star in Pocket Casts, its **Description** and **Chapters** pages show what Pocket writes beside the episode, and the side buttons skip 15 seconds back and 30 on, or hold for the chapters.
@@ -64,6 +65,8 @@ Each cut is made at a frame boundary, and a frame whose data began in a cut fram
 
 Self-promotion (a show's plugs for itself) is left in unless you switch it on.
 
+**Memory.** The Q2 has little memory to spare, so the check holds 24 bytes per MP3 frame, sizes its list once from the file, reads the episodes it compares with one at a time and keeps Go's heap near 32 MB: a four-hour episode peaks at about 38 MB (v1.1 needed over 80 MB, which ended Pocket on the longest episodes). An episode too big for the memory the Q2 has free at the time goes on the card uncut, "Too long to check in the Q2's free memory".
+
 **Limits.** Only MP3 episodes are cut (nearly all podcasts; an M4A goes on the card as it came). An ad the host bakes into every copy, that no other episode carries and that isn't a separate stitched piece stays until it is learned. Sponsor reads need SponsorBlock, a transcript or chapters to know about them. Comparing copies costs a second download when the host would send other ads.
 
 ## Files
@@ -76,6 +79,7 @@ Everything besides the app is kept over updates and removal:
 - `Podcasts/<Show>/.description/`: each episode's description, as text, for Now Playing.
 - `.pocket/ads.bin`: the ads learned. `.pocket/frames/`: recent episodes' frames, to compare new ones with. `.pocket/cuts/`: what was cut from each episode and why, which also maps a place in the cut episode to the episode as served, so places sync with your other devices.
 - `Podcasts/<Show>/2024-10-07 - Episode Title.mp3`: the episodes. `Podcasts/Pocket Casts Files/`: uploaded files.
+- `q2-pocket.log` at the card's root (`q2-pocket.old.log` before it, 512 KB each): the debug log. Each start, with what the run before left (a crash's message, the launcher's restarts and exit codes); each sync and why one failed; each download, its steps with the memory then, and how it ended; memory every minute; and why Pocket stopped. Send it along when something goes wrong.
 
 ## Build
 

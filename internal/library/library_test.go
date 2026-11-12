@@ -3,6 +3,7 @@ package library
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -145,9 +146,13 @@ func newFake(t *testing.T) *fake {
 	return f
 }
 
-func open(t *testing.T, dir string) *Library {
+func open(t *testing.T, dir string) *Library { return openWith(t, dir, false) }
+
+// openWith opens the library as a start after a crash (crashed) or not.
+func openWith(t *testing.T, dir string, crashed bool) *Library {
 	l, err := Open(Options{Dir: filepath.Join(dir, ".podcasts"), Root: filepath.Join(dir, "Podcasts"),
-		Client: &http.Client{Timeout: 5 * time.Second}, Fetch: &http.Client{}, Agent: "test", Ready: func() bool { return true }})
+		Client: &http.Client{Timeout: 5 * time.Second}, Fetch: &http.Client{}, Agent: "test", Ready: func() bool { return true },
+		Crashed: crashed})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,5 +752,81 @@ func TestCheckedAhead(t *testing.T) {
 	l.mu.Unlock()
 	if l.RefreshAll(context.Background(), time.Hour) != 1 {
 		t.Fatal("not refreshed")
+	}
+}
+
+// A download whose starts never came back (the app stopped under it each time) is failed once it
+// has had its tries, kept across starts in queue.json, and the next one goes; a fresh try resets it.
+func TestCrashedDownloadIsSkipped(t *testing.T) {
+	f, dir := newFake(t), t.TempDir()
+	l := open(t, dir)
+	si, _ := l.Subscribe(context.Background(), f.URL+"/feed.xml")
+	eps, _ := l.Episodes(si.Key)
+	l.DL.Queue(si.Key, eps[0].EID)
+	l.DL.Queue(si.Key, eps[1].EID)
+	l.DL.Cancel(si.Key, eps[1].EID) // the second: only the crashing one queued, so it starts each time
+	for start := 1; start <= tries; start++ {
+		j, _, _ := l.DL.next() // started, then the app crashed: queue.json as it left it
+		if j == nil || j.EID != eps[0].EID {
+			t.Fatalf("start %d: %+v", start, j)
+		}
+		l2 := openWith(t, dir, true)
+		ji := l2.DL.Job(si.Key, eps[0].EID)
+		if ji == nil || (ji.State == Failed) != (start == tries) {
+			t.Fatalf("after start %d: %+v", start, ji)
+		}
+		l = l2
+	}
+	if ji := l.DL.Job(si.Key, eps[0].EID); ji.Err != crashed {
+		t.Fatalf("skipped: %+v", ji)
+	}
+	if l.DL.RetryFailed() != 1 || l.DL.jobs[0].tries != 0 {
+		t.Fatal("Try Failed Again starts its count over")
+	}
+}
+
+// The episode Pocket crashed in goes after the others, so they come down meanwhile.
+func TestCrashedDownloadGoesLast(t *testing.T) {
+	f, dir := newFake(t), t.TempDir()
+	l := open(t, dir)
+	si, _ := l.Subscribe(context.Background(), f.URL+"/feed.xml")
+	eps, _ := l.Episodes(si.Key)
+	l.DL.Queue(si.Key, eps[0].EID)
+	l.DL.Queue(si.Key, eps[1].EID)
+	l.DL.next()
+	l = openWith(t, dir, true)
+	if j, _, _ := l.DL.next(); j == nil || j.EID != eps[1].EID {
+		t.Fatalf("the next one first: %+v", j)
+	}
+}
+
+// An app that ended with a download under way but didn't crash (stopped from the Q2, or the Q2
+// switched off) spends none of its tries, however often that happens.
+func TestInterruptedDownloadIsKept(t *testing.T) {
+	f, dir := newFake(t), t.TempDir()
+	l := open(t, dir)
+	si, _ := l.Subscribe(context.Background(), f.URL+"/feed.xml")
+	eps, _ := l.Episodes(si.Key)
+	l.DL.Queue(si.Key, eps[0].EID)
+	for start := 1; start <= tries+2; start++ {
+		if j, _, _ := l.DL.next(); j == nil || j.EID != eps[0].EID {
+			t.Fatalf("start %d: %+v", start, j)
+		}
+		l = open(t, dir)
+		if ji := l.DL.Job(si.Key, eps[0].EID); ji == nil || ji.State == Failed || l.DL.jobs[0].tries != 0 {
+			t.Fatalf("after start %d: %+v", start, ji)
+		}
+	}
+}
+
+// A fault in Pocket while it handles an episode fails that episode, not the app.
+func TestPanicFailsTheEpisode(t *testing.T) {
+	dir := t.TempDir()
+	l := open(t, dir)
+	j := &job{JobInfo: JobInfo{Title: "T"}}
+	err := l.DL.safely(j, func() error { var m map[string]int; m["x"]++; return nil })
+	var p permanent
+	if !errors.As(err, &p) || !strings.Contains(err.Error(), "couldn't handle this episode") {
+		t.Fatal(err)
 	}
 }

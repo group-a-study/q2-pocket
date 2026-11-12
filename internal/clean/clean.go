@@ -64,6 +64,8 @@ type Cleaner struct {
 	Agent    string
 	PC       *pocketcasts.Client
 	Settings func() Settings
+	Free     func() int64                     // bytes of memory free for a check (-1 unknown); nil: no limit
+	Log      func(format string, args ...any) // the debug log's lines; nil for none
 
 	mu    sync.Mutex // one episode at a time: the library of adverts is read and written whole
 	notes map[string]notesAt
@@ -110,6 +112,17 @@ const (
 	notesFor        = 30 * time.Minute
 )
 
+func (c *Cleaner) logf(format string, args ...any) {
+	if c.Log != nil {
+		c.Log(format, args...)
+	}
+}
+
+// memoryFor is about the memory a check of an MP3 of size bytes takes besides what the app has: its
+// frames (24 bytes each, a frame being about 400 bytes at 128 kbps), their hashes, another
+// episode's and the matching's tables. Measured on a four-hour episode (230 MB): about 29 MB.
+func memoryFor(size int64) int64 { return size / 8 }
+
 func (c *Cleaner) path(kind, key, eid, ext string) string {
 	return filepath.Join(c.Dir, kind, key+"-"+eid+ext)
 }
@@ -128,14 +141,26 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		return nil, nil
 	}
 	note("Checking for ads")
+	if st, err := os.Stat(part); err == nil && c.Free != nil {
+		if free := c.Free(); free >= 0 && free < memoryFor(st.Size()) {
+			c.logf("%q: %d MB, too big to check in the %d MB of memory free: left as it came", e.Title,
+				st.Size()>>20, free>>20)
+			rep.Note = "Too long to check in the Q2's free memory: left as it came"
+			c.save(e, rep)
+			c.uncutTranscript(ctx, e)
+			return nil, nil
+		}
+	}
 	s, err := mp3.ScanFile(part)
 	if err != nil {
+		c.logf("%q: not an MP3 (%v)", e.Title, err)
 		rep.Note = "Not an MP3: left as it came"
 		c.save(e, rep)
 		c.uncutTranscript(ctx, e)
 		return nil, nil
 	}
 	rep.Length = s.Duration()
+	c.logf("%q: %d frames, %.0f minutes", e.Title, len(s.Frames), rep.Length/60)
 	src := c.sources(ctx, e)
 	rep.Sources = append(rep.Sources, src.used...)
 
@@ -163,7 +188,9 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		ev.Peers = c.peers(e)
 		lib := adfree.LoadLibrary(filepath.Join(c.Dir, "ads.bin"))
 		ev.Lib = lib
+		c.logf("%q: comparing with %d other episodes, a second copy: %v", e.Title, len(ev.Peers), ev.Copy != nil)
 		res := adfree.Detect(s, ev)
+		c.logf("%q: %d ads found in %d parts", e.Title, len(res.Cuts), res.Parts)
 		dai = res.Cuts
 		for _, h := range res.Learn {
 			lib.Add(h, ev.Now)
@@ -582,7 +609,7 @@ func plural(n int, s string) string {
 }
 
 // peers is other episodes' frames: the show's latest and others', the newest first.
-func (c *Cleaner) peers(e Episode) [][]uint64 {
+func (c *Cleaner) peers(e Episode) []func() []uint64 {
 	ents, _ := os.ReadDir(filepath.Join(c.Dir, "frames"))
 	type f struct {
 		name string
@@ -598,15 +625,11 @@ func (c *Cleaner) peers(e Episode) [][]uint64 {
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].at.After(all[j].at) })
-	var out [][]uint64
+	var out []func() []uint64
 	same, other := 0, 0
 	for _, x := range all {
 		mine := strings.HasPrefix(x.name, e.Key+"-")
 		if mine && same >= peersSame || !mine && other >= peersOther {
-			continue
-		}
-		h, err := adfree.LoadHashes(filepath.Join(c.Dir, "frames", x.name))
-		if err != nil {
 			continue
 		}
 		if mine {
@@ -614,7 +637,11 @@ func (c *Cleaner) peers(e Episode) [][]uint64 {
 		} else {
 			other++
 		}
-		out = append(out, h)
+		path := filepath.Join(c.Dir, "frames", x.name)
+		out = append(out, func() []uint64 {
+			h, _ := adfree.LoadHashes(path) // nil if it can't be read: passed over
+			return h
+		})
 	}
 	return out
 }
@@ -691,11 +718,11 @@ func scanCopy(resp *http.Response) ([]uint64, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("the server answered HTTP %d", resp.StatusCode)
 	}
-	s, err := mp3.Scan(resp.Body)
+	h, err := mp3.ScanHashes(resp.Body)
 	if err != nil {
 		return nil, errors.New("it wasn't an MP3")
 	}
-	return adfree.FoldAll(s.Hashes()), nil
+	return h, nil
 }
 
 // found is what an episode has to look in for sponsor reads.

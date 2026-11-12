@@ -19,15 +19,19 @@ import (
 
 var ErrNotMP3 = errors.New("not an MP3 file")
 
-// Frame is one frame of a stream as read.
+// Frame is one frame of a stream as read. A four-hour episode has over half a million, all held
+// while it is checked, so it is kept small: 24 bytes.
 type Frame struct {
 	Off  int64  // where it starts in the file
-	Len  uint16 // its bytes, header included
-	Hash uint64 // of its bytes
-	MDB  uint16 // main_data_begin: how far back into earlier frames its audio data starts
+	Hash uint32 // of its bytes (FNV-1a's 64 bits folded to 32: all adfree compares)
 	Head uint32 // its header
+	Len  uint16 // its bytes, header included
+	MDB  uint16 // main_data_begin: how far back into earlier frames its audio data starts
 	Tag  bool   // it carries a Xing/Info tag: a stitched part's first frame, or the stream's
 }
+
+// fold is a 64-bit hash as the 32 bits kept (adfree.Fold).
+func fold(h uint64) uint32 { return uint32(h ^ h>>32) }
 
 // Pad is whether the frame has its padding slot.
 func (f Frame) Pad() bool { return f.Head>>9&1 == 1 }
@@ -73,7 +77,7 @@ func (s *Stream) At(i int) float64 { return s.Seconds(s.Info, max(i, s.Info)) }
 func (s *Stream) Hashes() []uint64 {
 	out := make([]uint64, len(s.Frames))
 	for i, f := range s.Frames {
-		out[i] = f.Hash
+		out[i] = uint64(f.Hash)
 	}
 	return out
 }
@@ -199,9 +203,23 @@ func (x header) mdb(frame []byte) uint16 {
 // version, layer and sample rate; anything between them (a stitched part's own tag, junk) is passed
 // over too, and so are frames of another sample rate. Two headers in a row must agree before the
 // first is taken, so a tag's bytes that look like one aren't.
-func Scan(r io.Reader) (*Stream, error) {
+func Scan(r io.Reader) (*Stream, error) { return scan(r, 0, nil) }
+
+// ScanHashes is only the frames' hashes, folded (Stream.Hashes): a second copy of an episode, which
+// needs no more, in a third of the memory.
+func ScanHashes(r io.Reader) ([]uint64, error) {
+	var h []uint64
+	_, err := scan(r, 0, func(f Frame) { h = append(h, uint64(f.Hash)) })
+	return h, err
+}
+
+// scan reads the frames, into the stream's Frames, or to each, which then has them instead. size,
+// when known, is the file's bytes, from which Frames is sized at once, so it isn't grown (copied)
+// a few hundred thousand frames in.
+func scan(r io.Reader, size int64, each func(Frame)) (*Stream, error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 	s := &Stream{}
+	count := 0 // frames read
 	var off int64
 	for { // ID3v2 tags, one after another
 		b, _ := br.Peek(10)
@@ -264,17 +282,40 @@ func Scan(r io.Reader) (*Stream, error) {
 		h.Reset()
 		h.Write(buf)
 		tag := infoFrame(x, buf)
-		s.Frames = append(s.Frames, Frame{Off: off, Len: uint16(x.length), Hash: h.Sum64(), MDB: x.mdb(buf), Head: be32(buf), Tag: tag})
-		if len(s.Frames) == 1 && tag {
+		f := Frame{Off: off, Len: uint16(x.length), Hash: fold(h.Sum64()), MDB: x.mdb(buf), Head: be32(buf), Tag: tag}
+		if each != nil {
+			each(f)
+		} else {
+			if count == 0 && size > off {
+				s.Frames = make([]Frame, 0, frameCount(x, buf, size-off))
+			}
+			s.Frames = append(s.Frames, f)
+		}
+		count++
+		if count == 1 && tag {
 			s.Info = 1
 		}
 		off += int64(x.length)
 	}
 	s.Size = off
-	if len(s.Frames) < 2 {
+	if count < 2 {
 		return nil, ErrNotMP3
 	}
 	return s, nil
+}
+
+// frameCount is about how many frames left bytes from the first frame (b, its header x) hold: as many
+// as the first one's length, an eighth more for a variable rate, or what a Xing/Info frame says if
+// that is more; at most a million (seven hours at 44.1 kHz), past which Frames grows as it must.
+func frameCount(x header, b []byte, left int64) int {
+	n := left / int64(x.length)
+	n += n/8 + 16
+	if x.layer == 3 {
+		if p := x.mainData(); len(b) >= p+12 && (string(b[p:p+4]) == "Xing" || string(b[p:p+4]) == "Info") && b[p+7]&1 != 0 {
+			n = max(n, int64(be32(b[p+8:]))+16)
+		}
+	}
+	return int(min(n, 1<<20))
 }
 
 // infoFrame is whether a stream's first frame is a Xing, Info or VBRI frame: silence carrying the
@@ -297,5 +338,9 @@ func ScanFile(path string) (*Stream, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return Scan(f)
+	var size int64
+	if fi, err := f.Stat(); err == nil {
+		size = fi.Size()
+	}
+	return scan(f, size, nil)
 }

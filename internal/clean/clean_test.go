@@ -143,3 +143,25 @@ func TestNotMP3(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// An episode too big for the memory the Q2 has free goes in as it came, unchecked, rather than
+// taking the app down with it.
+func TestTooBigForMemory(t *testing.T) {
+	dir := t.TempDir()
+	part := filepath.Join(dir, "ep.part")
+	_, b := fixture(t, "content.mp3")
+	os.WriteFile(part, b, 0o644)
+	asked := 0
+	c := &Cleaner{Dir: dir, Settings: func() Settings { return Settings{Ads: true} },
+		Free: func() int64 { asked++; return memoryFor(int64(len(b))) - 1 }}
+	if ed, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); ed != nil || err != nil || asked != 1 {
+		t.Fatal(ed, err, asked)
+	}
+	if r := Load(dir, "k", "e"); r == nil || r.Summary() != "Too long to check in the Q2's free memory: left as it came" {
+		t.Errorf("%+v", r)
+	}
+	c.Free = func() int64 { return memoryFor(int64(len(b))) }
+	if ed, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); ed == nil || err != nil {
+		t.Fatal("room enough: checked", ed, err)
+	}
+}

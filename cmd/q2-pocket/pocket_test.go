@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -117,6 +118,12 @@ func newPC(t *testing.T) (*pcFake, *httptest.Server) {
 // startSigned is startApp signed in to the fake Pocket Casts, with a Q2 Pod that takes places and
 // plays playlists.
 func startSigned(t *testing.T) (*app, string, *pcFake) {
+	return startSignedWith(t, func() bool { return true })
+}
+
+// startSignedWith is startSigned with ready saying whether the Q2 is online (syncs by themselves,
+// downloads).
+func startSignedWith(t *testing.T, ready func() bool) (*app, string, *pcFake) {
 	f, _ := newPC(t)
 	card := t.TempDir()
 	socks, err := os.MkdirTemp("/tmp", "q2p")
@@ -133,7 +140,7 @@ func startSigned(t *testing.T) (*app, string, *pcFake) {
 	o := options{dir: dir, card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"),
 		play: filepath.Join(socks, "play"), browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"),
 		star: filepath.Join(socks, "star"), starred: filepath.Join(socks, "starred"),
-		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: func() bool { return true }}
+		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: ready}
 	a, err := start(o)
 	if err != nil {
 		t.Fatal(err)
@@ -420,5 +427,44 @@ func TestNotesText(t *testing.T) {
 	got := clean.NotesText(`<p>Guest:  <b>Ana</b> &amp; friends.</p><p>Links:<br/><a href="x">site</a></p>`)
 	if want := "Guest: Ana & friends.\n\nLinks:\nsite"; got != want {
 		t.Errorf("%q, want %q", got, want)
+	}
+}
+
+// A download Up Next asked for is cancelled once its episode leaves Up Next (taken off in Pocket
+// Casts): one that crashes the app among them. The queue an older version left counts as Up Next's;
+// one asked for on the Q2 after that is kept. Downloads wait for the start's first sync.
+func TestLeftUpNext(t *testing.T) {
+	a, _, f := startSignedWith(t, func() bool { return false }) // offline: nothing syncs or comes down by itself
+	if !a.sy.holding() {
+		t.Fatal("downloads go before the first sync")
+	}
+	ctx := context.Background()
+	e3, err := a.sy.episode(ctx, pocketcasts.Episode{UUID: epA3, Podcast: podA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.lib.DL.Queue(e3.Key, e3.EID) // an older version's queue: Up Next's then
+	a.sy.once(ctx)
+	if a.sy.holding() {
+		t.Fatal("still held after the sync")
+	}
+	eids := func() (out []string) {
+		for _, j := range a.lib.DL.Jobs() {
+			e, _ := a.lib.Episode(j.Key, j.EID)
+			out = append(out, e.Feed.PC)
+		}
+		sort.Strings(out)
+		return
+	}
+	if got := strings.Join(eids(), ","); got != epA1+","+epA2 {
+		t.Fatalf("after the first sync: %s", got)
+	}
+	f.mu.Lock()
+	f.upnext = []string{epA1} // the second taken off Up Next in Pocket Casts
+	f.mu.Unlock()
+	a.lib.DL.Queue(e3.Key, e3.EID) // asked for on the Q2
+	a.sy.once(ctx)
+	if got := strings.Join(eids(), ","); got != epA1+","+epA3 {
+		t.Fatalf("after it left Up Next: %s", got)
 	}
 }

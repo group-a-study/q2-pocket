@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -196,4 +197,21 @@ func random(n int, alphabet string) string {
 		b[i] = alphabet[k.Int64()]
 	}
 	return string(b)
+}
+
+// MemAvailable is the memory the system has free for a program (/proc/meminfo's MemAvailable), in
+// bytes; -1 when it can't be read.
+func MemAvailable() int64 {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return -1
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == "MemAvailable:" {
+			if kb, err := strconv.ParseInt(f[1], 10, 64); err == nil {
+				return kb << 10
+			}
+		}
+	}
+	return -1
 }

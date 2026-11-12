@@ -32,11 +32,11 @@ const (
 
 // Evidence is what Detect weighs besides the stream.
 type Evidence struct {
-	Copy   []uint64   // another copy of the episode, its frames' folded hashes; nil for none
-	Peers  [][]uint64 // other episodes' folded hashes
-	Lib    *Library   // adverts found before; nil for none
-	Budget float64    // seconds the feed gives the episode, 0 if it gives none
-	Opens  bool       // a transcript of the episode opens with a sponsor read: it starts with an ad slot
+	Copy   []uint64          // another copy of the episode, its frames' folded hashes; nil for none
+	Peers  []func() []uint64 // other episodes' folded hashes, each read as Detect comes to it: one held at a time
+	Lib    *Library          // adverts found before; nil for none
+	Budget float64           // seconds the feed gives the episode, 0 if it gives none
+	Opens  bool              // a transcript of the episode opens with a sponsor read: it starts with an ad slot
 	Now    time.Time
 }
 
@@ -90,7 +90,11 @@ func Detect(s *mp3.Stream, ev Evidence) Result {
 			found = append(found, Cut{sp.From, sp.To, WhyHeard})
 		}
 	}
-	for _, p := range ev.Peers {
+	for _, load := range ev.Peers {
+		p := load()
+		if p == nil {
+			continue
+		}
 		runs := Runs(h, p, frames(3), false)
 		same := false
 		for _, r := range runs {

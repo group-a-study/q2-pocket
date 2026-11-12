@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -52,7 +53,7 @@ type JobInfo struct {
 
 type job struct {
 	JobInfo
-	tries     int
+	tries     int // starts so far, kept in queue.json: one the app crashed in counts too
 	notBefore time.Time
 	discard   bool // cancelled: its .part goes too
 }
@@ -62,7 +63,13 @@ type queued struct {
 	Key, EID string
 	Failed   bool   `json:",omitempty"`
 	Err      string `json:",omitempty"`
+	Tries    int    `json:",omitempty"`
+	Started  bool   `json:",omitempty"` // under way as the queue was last written
 }
+
+// crashed is the failure of a download the app crashed in on each of its tries (out of memory, say,
+// or a broken file): it is skipped, so the next one goes.
+const crashed = "Pocket crashed on it each try: skipped"
 
 // Downloader fetches episodes onto the card one at a time, in the order asked.
 type Downloader struct {
@@ -82,15 +89,32 @@ func newDownloader(l *Library) *Downloader {
 	if b, err := os.ReadFile(d.path()); err == nil {
 		json.Unmarshal(b, &saved)
 	}
+	var last []*job // the one the app crashed in: after the others
 	for _, s := range saved {
-		if e, err := l.Episode(s.Key, s.EID); err == nil && !e.OnCard {
-			j := &job{JobInfo: JobInfo{Key: s.Key, EID: s.EID, Show: e.Show, Title: e.Title, Size: e.Length, Err: s.Err}}
-			if s.Failed {
-				j.State = Failed
-			}
-			d.jobs = append(d.jobs, j)
+		e, err := l.Episode(s.Key, s.EID)
+		if err != nil || e.OnCard {
+			continue
 		}
+		j := &job{JobInfo: JobInfo{Key: s.Key, EID: s.EID, Show: e.Show, Title: e.Title, Size: e.Length, Err: s.Err},
+			tries: s.Tries}
+		switch {
+		case s.Failed:
+			j.State = Failed
+		case s.Started && !l.o.Crashed: // the app ended with it under way (stopped, the Q2 switched off)
+			j.tries = max(j.tries-1, 0)
+		case s.Started && j.tries >= tries:
+			j.State, j.Err = Failed, crashed
+			l.logf("download %q of %s: Pocket crashed on it each of %d tries: skipped", e.Title, e.Show, j.tries)
+		case s.Started:
+			j.Err = "Pocket crashed on it: trying again after the others"
+			l.logf("download %q of %s: Pocket crashed on it (try %d of %d): it goes after the others", e.Title, e.Show,
+				j.tries, tries)
+			last = append(last, j)
+			continue
+		}
+		d.jobs = append(d.jobs, j)
 	}
+	d.jobs = append(d.jobs, last...)
 	return d
 }
 
@@ -101,7 +125,7 @@ func (d *Downloader) save() {
 	out := []queued{}
 	for _, j := range d.jobs {
 		if !j.discard {
-			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err})
+			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active})
 		}
 	}
 	b, _ := json.Marshal(out)
@@ -114,6 +138,9 @@ func (d *Downloader) poke() {
 	default:
 	}
 }
+
+// Wake has the queue look again now (what held it may have let go).
+func (d *Downloader) Wake() { d.poke() }
 
 // Start runs the queue until Stop.
 func (d *Downloader) Start() {
@@ -343,6 +370,8 @@ func (d *Downloader) next() (*job, context.Context, time.Duration) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		j.State, j.Err, j.Done = Active, "", 0
+		j.tries++ // counted before it runs, and kept: a start the app crashes in counts
+		d.save()
 		d.cancel = cancel
 		return j, ctx, 0
 	}
@@ -361,7 +390,11 @@ func (d *Downloader) run() {
 		var ctx context.Context
 		wait := idleWait
 		if d.l.o.Ready() {
-			j, ctx, wait = d.next()
+			if d.l.o.Hold != nil && d.l.o.Hold() {
+				wait = 5 * time.Second // a hold ends by itself too
+			} else {
+				j, ctx, wait = d.next()
+			}
 		}
 		if j == nil {
 			select {
@@ -372,17 +405,47 @@ func (d *Downloader) run() {
 			}
 			continue
 		}
-		err := d.l.download(ctx, j, func(done, size int64) {
-			d.mu.Lock()
-			j.Done, j.Size, j.Note = done, size, ""
-			d.mu.Unlock()
-		}, func(note string) {
-			d.mu.Lock()
-			j.Note = note
-			d.mu.Unlock()
+		d.l.logf("download %q of %s: try %d of %d", j.Title, j.Show, j.tries, tries)
+		began := time.Now()
+		err := d.safely(j, func() error {
+			return d.l.download(ctx, j, func(done, size int64) {
+				d.mu.Lock()
+				j.Done, j.Size, j.Note = done, size, ""
+				d.mu.Unlock()
+			}, func(note string) {
+				d.mu.Lock()
+				j.Note = note
+				d.mu.Unlock()
+				d.l.logf("download %q: %s", j.Title, note)
+			})
 		})
 		d.finish(j, err)
+		took := time.Since(began).Round(time.Second)
+		d.mu.Lock()
+		state := j.State
+		d.mu.Unlock()
+		switch {
+		case err == nil:
+			d.l.logf("download %q: done in %v", j.Title, took)
+		case state == Failed:
+			d.l.logf("download %q: failed after %v, not tried again: %v", j.Title, took, err)
+		default:
+			d.l.logf("download %q: stopped after %v, to go on later: %v", j.Title, took, err)
+		}
+		debug.FreeOSMemory() // what checking it for ads took, back to the Q2
 	}
+}
+
+// safely is fn, a panic in it the episode's failure (logged with where it came from) rather than the
+// end of the app: an episode broken some way not foreseen fails, and the next one goes.
+func (d *Downloader) safely(j *job, fn func() error) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			d.l.logf("download %q: a fault in Pocket (%v): failed\n%s", j.Title, p, debug.Stack())
+			err = permanent{fmt.Errorf("Pocket couldn't handle this episode (%v)", p)}
+		}
+	}()
+	return fn()
 }
 
 // permanent is a failure trying again won't mend.
@@ -421,12 +484,14 @@ func (d *Downloader) finish(j *job, err error) {
 			d.jobs = append(d.jobs[:i], d.jobs[i+1:]...)
 		}
 	case stopping:
-		j.State = Waiting // resumed from its .part next time
+		j.State = Waiting // resumed from its .part next time, no try spent
+		j.tries = max(j.tries-1, 0)
 	case errors.Is(err, q2.ErrNoCard): // USB storage took it: no try spent, Q2 Pod restarts the app after
 		j.State, j.Err, j.notBefore = Waiting, "", time.Now().Add(idleWait)
+		j.tries = max(j.tries-1, 0)
 	default:
 		var p permanent
-		if j.tries++; errors.As(err, &p) || j.tries >= tries {
+		if errors.As(err, &p) || j.tries >= tries {
 			j.State, j.Err = Failed, err.Error()
 		} else {
 			j.State, j.Err = Waiting, err.Error()

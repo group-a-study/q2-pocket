@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,8 +130,13 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 			cover = l.cover(ctx, e.Image)
 		}
 		head = h.Build(tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}, cover)
-	} else if b, err := os.ReadFile(part); err == nil { // its own tag, as it was
-		head = b[:ed.Stream.TagLen]
+	} else if f, err := os.Open(part); err == nil { // its own tag, as it was (only its bytes read)
+		head = make([]byte, ed.Stream.TagLen)
+		_, err = io.ReadFull(f, head)
+		f.Close()
+		if err != nil {
+			return err
+		}
 	}
 	in, err := os.Open(part)
 	if err != nil {

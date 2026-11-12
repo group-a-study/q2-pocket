@@ -83,7 +83,7 @@ func TestReal(t *testing.T) {
 			ev.Copy = hashes(c.copy)
 		}
 		for _, p := range c.peers {
-			ev.Peers = append(ev.Peers, hashes(p))
+			ev.Peers = append(ev.Peers, have(hashes(p)))
 		}
 		start := time.Now()
 		r := Detect(s, ev)

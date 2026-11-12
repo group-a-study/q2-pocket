@@ -23,6 +23,9 @@ func scan(t *testing.T, b []byte) *mp3.Stream {
 	return s
 }
 
+// have is a peer already read.
+func have(h []uint64) func() []uint64 { return func() []uint64 { return h } }
+
 func fixture(t *testing.T, name string) (*mp3.Stream, []byte) {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "mp3", "testdata", name))
@@ -105,7 +108,7 @@ func TestPeer(t *testing.T) {
 	other, ob := fixture(t, "ad2.mp3")
 	peer := append(append([]byte(nil), ob...), audio(ad, ab, ad.Info, len(ad.Frames))...)
 	_ = other
-	r := Detect(scan(t, a), Evidence{Peers: [][]uint64{FoldAll(scan(t, peer).Hashes())}})
+	r := Detect(scan(t, a), Evidence{Peers: []func() []uint64{have(FoldAll(scan(t, peer).Hashes()))}})
 	if !covers(r.Cuts, mid) || cutFrames(r.Cuts) != mid.To-mid.From {
 		t.Errorf("cuts %+v, advert %v", r.Cuts, mid)
 	}
@@ -115,7 +118,7 @@ func TestPeer(t *testing.T) {
 func TestPeerSameEpisode(t *testing.T) {
 	a, _, _ := copyWith(t, 200, "", "")
 	s := scan(t, a)
-	if r := Detect(s, Evidence{Peers: [][]uint64{FoldAll(s.Hashes())}}); len(r.Cuts) != 0 {
+	if r := Detect(s, Evidence{Peers: []func() []uint64{have(FoldAll(s.Hashes()))}}); len(r.Cuts) != 0 {
 		t.Errorf("cuts %+v", r.Cuts)
 	}
 }
@@ -194,7 +197,7 @@ func synth(parts []part, seed int64) (*mp3.Stream, []Span) {
 			if i == 0 {
 				mdb = 0
 			}
-			s.Frames = append(s.Frames, mp3.Frame{Off: int64(len(s.Frames)) * 418, Len: 418, Hash: rnd.Uint64(), MDB: mdb, Head: h})
+			s.Frames = append(s.Frames, mp3.Frame{Off: int64(len(s.Frames)) * 418, Len: 418, Hash: rnd.Uint32(), MDB: mdb, Head: h})
 		}
 		spans = append(spans, Span{from, len(s.Frames)})
 	}
