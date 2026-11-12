@@ -303,12 +303,15 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		return a.pcGet(key)
 	case "upplay":
 		return a.upPlay(key)
+	case "dlall":
+		return a.dlAll()
 	case "caps":
 		var rows []q2spot.Row
 		for _, op := range []string{"menu", "shows", "show", "opts", "latest", "downloaded", "downloads", "search",
 			"preview", "get", "cancel", "del", "sub", "refresh", "refresh1", "auto", "getlatest", "wipe", "unsub",
 			"retryall", "cancelall", "stop", "sleep", "setsleep", "upnext", "inprog", "new", "starred", "history",
-			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "unq", "upplay"} {
+			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "unq", "upplay",
+			"dlall"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}
 		return q2spot.Reply{Message: version, Rows: rows}

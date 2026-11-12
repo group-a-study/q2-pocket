@@ -177,7 +177,16 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 		if at.IsZero() && a.pc.SignedIn() {
 			a.sy.kick()
 		}
-		reply(rw, http.StatusOK, map[string]any{"loading": at.IsZero(), "episodes": w.pcEpisodes(up)})
+		reply(rw, http.StatusOK, map[string]any{"loading": at.IsZero(), "episodes": w.pcEpisodes(up),
+			"downloadingAll": a.sy.allPending()})
+	case route == "downloadall" && post: // Up Next's Download All, as the Q2's (no second press: the page asks)
+		on := !a.sy.allPending()
+		a.sy.downloadAll(on)
+		msg := "Stopped downloading all of Up Next"
+		if on {
+			msg = "Downloading all of Up Next"
+		}
+		reply(rw, http.StatusOK, map[string]any{"message": msg, "downloadingAll": on})
 	case route == "list" && !post:
 		name := r.URL.Query().Get("name")
 		if _, known := listNames[name]; !known {

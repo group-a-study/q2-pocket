@@ -254,8 +254,31 @@ func TestSync(t *testing.T) {
 
 	// the pages
 	up := spot(t, a, "upnext")
-	if len(up.rows) != 2 || up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[1][4] != "1" || up.rows[0][5] != "unq:"+podA+":"+epA2 {
+	if len(up.rows) != 3 || up.rows[0][1] != "dlall" || up.rows[0][2] != "Download All" || up.rows[0][3] != "Every episode is on the Q2" {
+		t.Fatalf("Up Next page: %v", up.rows)
+	}
+	up.rows = up.rows[1:] // Download All first, then the episodes
+	if up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[1][4] != "1" || up.rows[0][5] != "unq:"+podA+":"+epA2 {
 		t.Errorf("Up Next page: %v", up.rows)
+	}
+	// Download All: a second press turns it on, a sync through the whole of Up Next ends it, a press
+	// while it runs stops it
+	if r := spot(t, a, "dlall"); r.message != "Press again to download all of Up Next" || a.sy.allPending() {
+		t.Errorf("dlall once: %+v", r)
+	}
+	if r := spot(t, a, "dlall"); r.message != "Downloading all of Up Next" || !a.sy.allPending() {
+		t.Errorf("dlall twice: %+v", r)
+	}
+	if up := spot(t, a, "upnext"); up.rows[0][2] != "Downloading All of Up Next" {
+		t.Errorf("Up Next page while all: %v", up.rows[0])
+	}
+	if r := spot(t, a, "dlall"); r.message != "Stopped downloading all of Up Next" || a.sy.allPending() {
+		t.Errorf("dlall stop: %+v", r)
+	}
+	a.sy.downloadAll(true)
+	a.sy.once(a.ctx)
+	if a.sy.allPending() {
+		t.Error("a sync through all of Up Next left Download All on")
 	}
 	// pressed: Up Next from there, an .m3u on the card for Q2 Pod to play in order
 	if r := spot(t, a, "upplay", "0"); r.message != "Playing Up Next" {

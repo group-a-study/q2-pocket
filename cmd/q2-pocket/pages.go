@@ -111,7 +111,45 @@ func (a *app) upNextPage(off int) q2spot.Reply {
 			}
 		}
 	}
-	return live(rows, next, a.anyMoving(eps))
+	if off == 0 && a.settings().UpNext >= 0 { // all of it kept downloaded anyway: no button
+		rows = append([]q2spot.Row{a.allRow(eps)}, rows...)
+	}
+	return live(rows, next, a.anyMoving(eps) || a.sy.allPending())
+}
+
+// allRow is the Up Next page's Download All: the episodes not on the Q2 yet, all of them asked for
+// once a second press confirms (dlAll); while that runs, a press stops it.
+func (a *app) allRow(eps []pocketcasts.Episode) q2spot.Row {
+	if a.sy.allPending() {
+		return act("dlall", "", "Downloading All of Up Next", "Press to stop asking for the rest")
+	}
+	left := 0
+	for _, e := range eps {
+		if ep, err := a.lib.PCEpisode(e.Show(), e.UUID); err != nil || !ep.OnCard && ep.Job == nil {
+			left++
+		}
+	}
+	sub := "Every episode is on the Q2"
+	if left > 0 {
+		sub = plural(left, "episode") + " not on the Q2 yet"
+	}
+	return act("dlall", "", "Download All", sub)
+}
+
+// dlAll is Download All's press: on after a second press, off while it runs.
+func (a *app) dlAll() q2spot.Reply {
+	if !a.pc.SignedIn() {
+		return q2spot.Fail(q2spot.Login, "Sign in to Pocket Casts on the phone page first")
+	}
+	if a.sy.allPending() {
+		a.sy.downloadAll(false)
+		return q2spot.Reply{Message: "Stopped downloading all of Up Next"}
+	}
+	if !a.confirm("dlall") {
+		return q2spot.Reply{Message: "Press again to download all of Up Next"}
+	}
+	a.sy.downloadAll(true)
+	return q2spot.Reply{Message: "Downloading all of Up Next"}
 }
 
 // upPlay plays Up Next from its episode at i on, in order, as Q2 Pod plays an app's playlist
@@ -452,7 +490,7 @@ func (a *app) adfreePage() q2spot.Reply {
 		info("Ads Learned", fmt.Sprintf("%d, recognised wherever they play again", known)),
 	}
 	if a.pc.SignedIn() {
-		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order"),
+		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order; Download All on Up Next gets the rest"),
 			act("set", "deleteplayed", "Delete Played Episodes: "+onOff(s.DeletePlayed), "Once Pocket Casts marks them played"))
 	}
 	return q2spot.Reply{Rows: rows}

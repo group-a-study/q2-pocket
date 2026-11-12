@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.0"
+const version = "q2-v1.1"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -45,6 +45,7 @@ type options struct {
 	sleep                                  string // the Sleep Timer's request to Q2 Pod (sleep.go)
 	places, play                           string // places for Q2 Pod's resume ring (sync.go), and Up Next to play (pages.go)
 	star, starred                          string // Now Playing's star asked for, and the starred episodes (sync.go)
+	library                                string // Q2 Pod's library update, asked for (rescan)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
 }
@@ -73,6 +74,8 @@ type app struct {
 	armed    map[string]time.Time // a press that asks for a second one to confirm
 	found    map[string]string    // a search result's key: what to fetch for its preview
 	loads    map[string]*load     // previews being fetched or fetched, by what was asked
+	rescanAt time.Time            // the episodes on the card last compared (rescan)
+	scanned  string               // and what they were: their count and bytes
 	placeMap map[uint32]int       // Q2 Pod's resume ring as last read (places), and its file's time
 	placesAt time.Time
 	sleepSet int // the Sleep Timer's minutes as last chosen, for its page's Selected
@@ -97,6 +100,7 @@ func main() {
 	flag.StringVar(&o.play, "play-file", "/tmp/q2-pocket.play", "a playlist for Q2 Pod to play")
 	flag.StringVar(&o.star, "star-file", "/tmp/q2-star", "Now Playing's star, asked for")
 	flag.StringVar(&o.starred, "starred-file", "/tmp/q2-starred", "the downloaded episodes starred")
+	flag.StringVar(&o.library, "library-file", "/tmp/q2-pocket.library", "Q2 Pod's library update, asked for")
 	flag.StringVar(&o.browse, "browse-socket", "/tmp/q2-pocket.browse.sock", "Q2SPOT/1 for the Q2's page")
 	flag.StringVar(&o.control, "control-socket", "/tmp/q2-pocket.sock", "datagrams: q quits")
 	flag.IntVar(&o.port, "port", 8100, "the phone page's port (the next free one if taken)")
@@ -238,6 +242,10 @@ func (a *app) run() {
 		case <-t.C:
 			a.writeState()
 			a.sy.star()
+			if time.Since(a.rescanAt) >= rescanEvery {
+				a.rescanAt = time.Now()
+				a.rescan()
+			}
 			s := a.settings()
 			if a.sy.listening() { // a podcast playing: its place is synced, so stay
 				a.touch(false)
@@ -249,6 +257,44 @@ func (a *app) run() {
 				a.shutdown()
 			}
 		}
+	}
+}
+
+// rescanEvery is how often the episodes on the card are compared with those Q2 Pod's library was
+// last asked to take in.
+const rescanEvery = time.Minute
+
+// rescan asks Q2 Pod to update its library (Update Local Music, which it runs once nothing plays)
+// when the episodes on the card have changed and no download is under way: Q2 Podcast's Library
+// lists Episodes, Starred and Recently Played from it. A Q2 Pod without card apps' library updates
+// (caps "library") is left alone.
+func (a *app) rescan() {
+	if !q2.HasCap("library") {
+		return
+	}
+	for _, j := range a.lib.DL.Jobs() {
+		if j.State != library.Failed {
+			return
+		}
+	}
+	eps, bytes := a.lib.Downloaded()
+	mark := fmt.Sprintf("%d %d", len(eps), bytes)
+	if mark == a.scanned {
+		return
+	}
+	kept := filepath.Join(a.opts.dir, "scanned") // the mark, kept across starts
+	if a.scanned == "" {
+		if b, err := os.ReadFile(kept); err == nil {
+			a.scanned = string(b)
+		}
+		if mark == a.scanned {
+			return
+		}
+	}
+	req := fmt.Sprintf("%d\nscan\n", time.Now().UnixMilli())
+	if q2.WriteFile(a.opts.library, []byte(req)) == nil {
+		a.scanned = mark
+		q2.WriteFile(kept, []byte(mark))
 	}
 }
 

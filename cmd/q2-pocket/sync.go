@@ -42,9 +42,11 @@ const (
 
 // syncState is .pocket/sync.json.
 type syncState struct {
-	Eps      map[string]*epSync `json:"episodes"`       // by "<key>:<eid>"
-	Last     uint32             `json:"last,omitempty"` // the ring's newest place, as last seen
-	Migrated bool               `json:"migrated"`       // shows subscribed by their feed found in Pocket Casts
+	Eps      map[string]*epSync `json:"episodes"`               // by "<key>:<eid>"
+	Last     uint32             `json:"last,omitempty"`         // the ring's newest place, as last seen
+	Migrated bool               `json:"migrated"`               // shows subscribed by their feed found in Pocket Casts
+	All      bool               `json:"download_all,omitempty"` // Download All: the rest of Up Next still to be asked for
+	Scripts  map[string]bool    `json:"transcripts,omitempty"`  // episodes on the card whose transcript was looked for
 }
 
 // epSync is an episode's place as last seen on both sides.
@@ -201,6 +203,7 @@ func (s *syncer) once(ctx context.Context) {
 	s.nowPlaying(ctx)
 	s.starred(ctx)
 	s.download(ctx, up)
+	s.transcripts(ctx)
 	s.filePlaces(ctx)
 	s.save()
 	s.mu.Lock()
@@ -304,12 +307,15 @@ func cmpOr(a, b string) string {
 	return b
 }
 
-// download keeps Up Next's first few episodes downloaded.
-// download keeps Up Next downloaded: all of it (UpNext < 0), or its first UpNext episodes. A sync
-// looks up at most newPerSync episodes the library doesn't have yet (their shows fetched first), and
-// asks for another sync soon while more are left: a long Up Next takes a while, places first.
+// download keeps Up Next downloaded: all of it (UpNext < 0), or its first UpNext episodes; all of it
+// once while Download All is on, which a pass through the whole of Up Next ends. A sync looks up at
+// most newPerSync episodes the library doesn't have yet (their shows fetched first), and asks for
+// another sync soon while more are left: a long Up Next takes a while, places first.
 func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
-	n, looked := s.a.settings().UpNext, 0
+	n, looked, all := s.a.settings().UpNext, 0, s.allPending()
+	if all {
+		n = -1
+	}
 	for _, e := range up {
 		if n == 0 || ctx.Err() != nil {
 			return
@@ -331,6 +337,60 @@ func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
 			s.a.lib.DL.Queue(ep.Key, ep.EID)
 		}
 	}
+	if all && ctx.Err() == nil { // every episode of Up Next asked for: Download All is done
+		s.downloadAll(false)
+	}
+}
+
+// transcriptsPerSync is how many episodes on the card a sync looks up a transcript for.
+const transcriptsPerSync = 5
+
+// transcripts gives episodes downloaded before transcripts were kept theirs (Now Playing's
+// transcript page), a few a sync, each looked for once.
+func (s *syncer) transcripts(ctx context.Context) {
+	eps, _ := s.a.lib.Downloaded()
+	n := 0
+	for _, e := range eps {
+		id := e.Key + ":" + e.EID
+		s.mu.Lock()
+		done := s.st.Scripts[id]
+		s.mu.Unlock()
+		if done || ctx.Err() != nil {
+			continue
+		}
+		if n == transcriptsPerSync {
+			s.again()
+			return
+		}
+		n++
+		if !s.a.lib.Transcript(ctx, e) {
+			return // a download is being cleaned: next time
+		}
+		s.mu.Lock()
+		if s.st.Scripts == nil {
+			s.st.Scripts = map[string]bool{}
+		}
+		s.st.Scripts[id] = true
+		s.mu.Unlock()
+	}
+}
+
+// downloadAll turns Download All on (and asks for a sync) or off.
+func (s *syncer) downloadAll(on bool) {
+	s.mu.Lock()
+	s.st.All = on
+	s.mu.Unlock()
+	s.save()
+	if on {
+		s.kick()
+	}
+}
+
+// allPending is whether Download All is still asking for Up Next's episodes.
+func (s *syncer) allPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.All
 }
 
 // again asks for the next sync soon, not on syncEvery's clock.

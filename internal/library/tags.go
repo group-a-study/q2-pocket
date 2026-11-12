@@ -152,6 +152,15 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 	return nil
 }
 
+// Transcript writes the transcript beside an episode already on the card, if it has one and has
+// none there yet (clean.Cleaner.Backfill); false when that has to wait.
+func (l *Library) Transcript(ctx context.Context, e EpisodeInfo) bool {
+	if l.o.Clean == nil || !e.OnCard {
+		return true
+	}
+	return l.o.Clean.Backfill(ctx, cleanEpisode(e))
+}
+
 // cleanEpisode is an episode as the cleaner takes it.
 func cleanEpisode(e EpisodeInfo) clean.Episode {
 	f := e.Feed

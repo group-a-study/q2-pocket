@@ -124,6 +124,7 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	rep := &Report{Checked: time.Now()}
 	c.keepNotes(ctx, e)
 	if !set.Ads && !set.Sponsors {
+		c.uncutTranscript(ctx, e)
 		return nil, nil
 	}
 	note("Checking for ads")
@@ -131,6 +132,7 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	if err != nil {
 		rep.Note = "Not an MP3: left as it came"
 		c.save(e, rep)
+		c.uncutTranscript(ctx, e)
 		return nil, nil
 	}
 	rep.Length = s.Duration()
@@ -193,6 +195,26 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	for _, k := range rep.Cuts {
 		ranges = append(ranges, mp3.Range{From: s.FrameAt(k.From), To: s.FrameAt(k.To)})
 	}
+	if len(src.cues) > 0 { // its transcript, moved with the audio: as downloaded, or as cut of its adverts
+		dl := func(t float64) float64 { return t }
+		switch sponsor.Fit(sponsor.End(src.cues), kept, original, true) {
+		case sponsor.Clean:
+			dl = inDownload(s, dai)
+		case sponsor.Unplaced:
+			dl = nil
+		}
+		if dl != nil {
+			keepTranscript(e.Path, src.cues, func(t float64) (float64, bool) {
+				t = dl(t)
+				for _, k := range rep.Cuts {
+					if t >= k.From && t < k.To {
+						return 0, false
+					}
+				}
+				return rep.Kept(t), true
+			})
+		}
+	}
 	os.MkdirAll(filepath.Join(c.Dir, "frames"), 0o755)
 	adfree.SaveHashes(c.path("frames", e.Key, e.EID, ".bin"), adfree.FoldAll(s.Hashes()))
 	c.prune()
@@ -234,6 +256,167 @@ func (c *Cleaner) chapters(ctx context.Context, u string, length float64) []tag.
 func NotesPath(episode string) string {
 	base := filepath.Base(episode)
 	return filepath.Join(filepath.Dir(episode), ".description", strings.TrimSuffix(base, filepath.Ext(base))+".txt")
+}
+
+// inDownload maps a second of the episode as cut of its adverts (dai) to the same second in the
+// download.
+func inDownload(s *mp3.Stream, dai []adfree.Cut) func(float64) float64 {
+	return func(t float64) float64 {
+		for _, k := range dai {
+			if a := s.At(k.From); a <= t {
+				t += s.Seconds(k.From, k.To)
+			}
+		}
+		return t
+	}
+}
+
+// TranscriptPath is where an episode's transcript is kept for the Q2: an .lrc beside it, its name
+// with .lrc. Q2 Podcast's player reads it as the episode's lyrics, and Now Playing shows it as the
+// transcript page, following the episode as it plays.
+func TranscriptPath(episode string) string {
+	return strings.TrimSuffix(episode, filepath.Ext(episode)) + ".lrc"
+}
+
+// captionMax is a transcript line's most bytes: the Q2 lays a line out at 34 px and keeps four rows
+// of it, about this much.
+const captionMax = 60
+
+// keepTranscript writes cues as an .lrc beside the episode at path, each cue's time mapped by at to
+// the episode's second on the card (a cue whose start was cut, not at all). A cue longer than
+// captionMax is split at its words, its time shared out by length, so each line fits the Q2's page.
+func keepTranscript(path string, cues []sponsor.Cue, at func(float64) (float64, bool)) {
+	if path == "" {
+		return
+	}
+	var b strings.Builder
+	for _, c := range cues {
+		from, ok := at(c.From)
+		if !ok {
+			continue
+		}
+		to, ok := at(c.To)
+		if !ok || to < from {
+			to = from + c.To - c.From
+		}
+		parts := captions(c.Text)
+		total := 0
+		for _, p := range parts {
+			total += len(p)
+		}
+		done := 0
+		for _, p := range parts {
+			t := from + (to-from)*float64(done)/float64(max(total, 1))
+			done += len(p)
+			ms := int(math.Round(t * 1000))
+			fmt.Fprintf(&b, "[%02d:%02d.%02d]%s\n", ms/60000, ms/1000%60, ms%1000/10, p)
+		}
+	}
+	p := TranscriptPath(path)
+	if b.Len() == 0 {
+		return
+	}
+	if os.WriteFile(p+".tmp", []byte(b.String()), 0o644) == nil {
+		os.Rename(p+".tmp", p)
+	}
+}
+
+// captions is text as lines of at most captionMax bytes, broken between words (a word longer than
+// that is a line of its own).
+func captions(text string) []string {
+	var out []string
+	line := ""
+	for _, w := range strings.Fields(text) {
+		if line != "" && len(line)+1+len(w) > captionMax {
+			out = append(out, line)
+			line = ""
+		}
+		if line != "" {
+			line += " "
+		}
+		line += w
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	return out
+}
+
+// Backfill writes the transcript of an episode already on the card (downloaded before transcripts
+// were kept beside episodes), its times moved by the cuts its report has: an advert's (Kind "ad")
+// for a transcript of the episode without them, then every cut. Nothing when the episode has no
+// transcript, or one whose length is neither the download's nor its length without adverts; false
+// when a download is being cleaned (one episode at a time): ask again later.
+func (c *Cleaner) Backfill(ctx context.Context, e Episode) bool {
+	if !c.mu.TryLock() {
+		return false
+	}
+	defer c.mu.Unlock()
+	if _, err := os.Stat(TranscriptPath(e.Path)); err == nil {
+		return true
+	}
+	rep := Load(c.Dir, e.Key, e.EID)
+	length := float64(e.Duration)
+	if rep != nil && rep.Length > 0 {
+		length = rep.Length
+	}
+	if length <= 0 {
+		return true
+	}
+	src := c.sources(ctx, e)
+	if len(src.cues) == 0 {
+		return true
+	}
+	var ads []Cut
+	adSec := 0.0
+	if rep != nil {
+		for _, k := range rep.Cuts {
+			if k.Kind == "ad" {
+				ads = append(ads, k)
+				adSec += k.To - k.From
+			}
+		}
+	}
+	dl := func(t float64) float64 { return t }
+	switch sponsor.Fit(sponsor.End(src.cues), length-adSec, length, true) {
+	case sponsor.Unplaced:
+		return true
+	case sponsor.Clean:
+		dl = func(t float64) float64 {
+			for _, k := range ads { // in order: each advert before the point moves it on
+				if k.From <= t {
+					t += k.To - k.From
+				}
+			}
+			return t
+		}
+	}
+	keepTranscript(e.Path, src.cues, func(t float64) (float64, bool) {
+		t = dl(t)
+		if rep != nil {
+			for _, k := range rep.Cuts {
+				if t >= k.From && t < k.To {
+					return 0, false
+				}
+			}
+		}
+		return rep.Kept(t), true
+	})
+	return true
+}
+
+// uncutTranscript keeps the transcript of an episode left as it came (not an MP3, or nothing to
+// cut), when its length is the episode's (Fit against the length its feed gives).
+func (c *Cleaner) uncutTranscript(ctx context.Context, e Episode) {
+	if e.Duration <= 0 {
+		return
+	}
+	src := c.sources(ctx, e)
+	d := float64(e.Duration)
+	if len(src.cues) == 0 || sponsor.Fit(sponsor.End(src.cues), d, d, true) == sponsor.Unplaced {
+		return
+	}
+	keepTranscript(e.Path, src.cues, func(t float64) (float64, bool) { return t, true })
 }
 
 // keepNotes keeps an episode's description beside it, from Pocket Casts' show notes (the feed's
@@ -599,15 +782,7 @@ func (c *Cleaner) showNotes(ctx context.Context, podcast string) map[string]pock
 // has, each used only when its timeline is the episode's (cut or not).
 func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Settings, src found, dai []adfree.Cut,
 	kept, original float64, rep *Report, part string) []Cut {
-	// a second of the cut episode in the download
-	orig := func(t float64) float64 {
-		for _, k := range dai {
-			if a := s.At(k.From); a <= t {
-				t += s.Seconds(k.From, k.To)
-			}
-		}
-		return t
-	}
+	orig := inDownload(s, dai)
 	var out []Cut
 	add := func(segs []sponsor.Segment, timeline int) bool {
 		if timeline == sponsor.Unplaced || len(segs) == 0 {

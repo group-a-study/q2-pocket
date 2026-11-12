@@ -11,7 +11,7 @@ import (
 )
 
 // settings is .pocket/config.json. Missing choices take their defaults: adverts and sponsor reads
-// cut, copies compared, all of Up Next downloaded, played episodes kept.
+// cut, copies compared, Up Next's first upNextFirst episodes downloaded, played episodes kept.
 type settings struct {
 	Key         string `json:"web_key"`      // the QR code's: signs a browser in
 	PIN         string `json:"pin"`          // the Q2's screen's, typed with the address
@@ -23,14 +23,23 @@ type settings struct {
 	Copy         bool `json:"compare_copies"`
 	UpNext       int  `json:"download_up_next"` // Up Next kept downloaded: -1 all, else its first this many
 	DeletePlayed bool `json:"delete_played"`
+	Version      int  `json:"settings_version"` // settingsVersion once loadSettings has brought it up to date
 
 	YouTubeKey    string `json:"youtube_api_key,omitempty"`
 	SpotifyID     string `json:"spotify_client_id,omitempty"`
 	SpotifySecret string `json:"spotify_client_secret,omitempty"`
 }
 
+// upNextFirst is how many of Up Next's episodes are kept downloaded unless chosen otherwise; Download
+// All on the Up Next page fetches the rest once.
+const upNextFirst = 10
+
+// settingsVersion 2: Up Next's default became its first upNextFirst, not all of it, so a config
+// saved before (which holds the old default, -1) takes the new one once.
+const settingsVersion = 2
+
 func defaults() settings {
-	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: -1}
+	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: upNextFirst}
 }
 
 // loadSettings reads config.json, making the key and PIN the first time; they stay, so a phone
@@ -49,6 +58,12 @@ func loadSettings(dir string) settings {
 	}
 	if s.IdleMinutes < 0 {
 		s.IdleMinutes = 0
+	}
+	if s.Version < settingsVersion {
+		if s.UpNext < 0 {
+			s.UpNext = upNextFirst
+		}
+		s.Version, dirty = settingsVersion, true
 	}
 	if dirty {
 		saveSettings(dir, s)

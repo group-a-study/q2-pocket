@@ -77,6 +77,7 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
 
     <section id="upnext" class="view hidden">
       <p class="muted" id="upnextNote"></p>
+      <div id="upnextAll"></div>
       <div class="card" id="upnextList"></div>
     </section>
 
@@ -385,6 +386,13 @@ function renderUpNext(d) {
   const list = $("upnextList");
   list.replaceChildren();
   $("upnextNote").textContent = d.loading ? "Asking Pocket Casts…" : d.episodes.length + " episodes";
+  const all = $("upnextAll");
+  all.replaceChildren();
+  if (!d.loading && d.episodes.length) all.append(button(d.downloadingAll ? "Stop Downloading All" : "Download All", "quiet", async () => {
+    if (!d.downloadingAll && !confirm("Download every episode in Up Next that isn't on the Q2 yet?")) return;
+    toast((await api("pc/downloadall", {})).message);
+    refresh();
+  }));
   if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Up Next is empty."));
   for (const e of d.episodes.slice(0, 200)) list.append(pcRow(e));
   if (d.episodes.length > 200) list.append(el("div", "empty", "…and " + (d.episodes.length - 200) + " more"));
