@@ -251,8 +251,21 @@ func (a *app) isArmed(what string) bool {
 	return ok && time.Since(at) < confirmIn
 }
 
+// openGap: the menu asked for this long after the Q2's page last asked anything is the app opened.
+const openGap = 45 * time.Second
+
 func (a *app) device(req q2spot.Request) q2spot.Reply {
 	a.touch(false)
+	a.mu.Lock()
+	opened := req.Op == "menu" && (a.pageAt.IsZero() || time.Since(a.pageAt) > openGap)
+	a.pageAt = time.Now()
+	a.mu.Unlock()
+	if opened && a.pc.SignedIn() { // the Q2's page opened: sync with Pocket Casts at once
+		a.mu.Lock()
+		a.gate = time.Now()
+		a.mu.Unlock()
+		a.sy.kick()
+	}
 	ok := func(msg string) q2spot.Reply { return q2spot.Reply{Message: msg} }
 	key := req.Arg(0)
 	if strings.HasPrefix(req.Op, "del:") { // Play/Pause held on an episode on the card
@@ -311,7 +324,7 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 			"preview", "get", "cancel", "del", "sub", "refresh", "refresh1", "auto", "getlatest", "wipe", "unsub",
 			"retryall", "cancelall", "stop", "sleep", "setsleep", "upnext", "inprog", "new", "starred", "history",
 			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "unq", "upplay",
-			"dlall"} {
+			"dlall", "stopafter", "resume"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}
 		return q2spot.Reply{Message: version, Rows: rows}
@@ -421,6 +434,14 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		return ok("Trying " + plural(a.lib.DL.RetryFailed(), "download") + " again")
 	case "cancelall":
 		return ok("Cancelled " + plural(a.lib.DL.CancelAll(), "download"))
+	case "stopafter": // the one under way finishes; nothing else by itself until resumed
+		n := a.lib.DL.CancelWaiting()
+		a.sy.downloadAll(false)
+		a.sy.hold(true)
+		return ok("Stopping after this one: " + plural(n, "download") + " cancelled")
+	case "resume":
+		a.sy.hold(false)
+		return ok("Up Next downloads again")
 	case "stop":
 		go func() { time.Sleep(300 * time.Millisecond); a.shutdown() }() // the reply first
 		return ok("Pocket off")
@@ -428,7 +449,38 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 	return q2spot.Fail(q2spot.Unsupported, "Update Pocket on the card")
 }
 
+// syncGate is the page Pocket shows in its menu's place from its opening (device) until a sync with
+// Pocket Casts has ended well after it: syncing, or why it couldn't, with Try Again.
+func (a *app) syncGate() ([]q2spot.Row, bool) {
+	a.mu.Lock()
+	gate := a.gate
+	a.mu.Unlock()
+	if gate.IsZero() || !a.pc.SignedIn() {
+		return nil, false
+	}
+	if at, _, _ := a.sy.status(); at.After(gate) {
+		a.mu.Lock()
+		a.gate = time.Time{}
+		a.mu.Unlock()
+		return nil, false
+	}
+	retry := act("sync", "", "Try Again", "Sync with Pocket Casts")
+	if !a.online() {
+		return []q2spot.Row{info("Connect to Wi-Fi", "Pocket syncs with Pocket Casts before it opens"), retry}, true
+	}
+	if why := a.sy.failedSince(gate); why != "" {
+		_, _, busy := a.sy.status()
+		if !busy {
+			return []q2spot.Row{info("Couldn't sync with Pocket Casts", why), retry}, true
+		}
+	}
+	return []q2spot.Row{info("Syncing with Pocket Casts…", "Pocket opens once it has synced")}, true
+}
+
 func (a *app) menu() q2spot.Reply {
+	if rows, waiting := a.syncGate(); waiting {
+		return live(rows, "", true)
+	}
 	shows := a.lib.Shows()
 	jobs := a.lib.DL.Jobs()
 	busy := a.lib.Refreshing()
@@ -665,7 +717,11 @@ func (a *app) showOpts(key string) q2spot.Reply {
 func (a *app) downloads() q2spot.Reply {
 	jobs := a.lib.DL.Jobs()
 	if len(jobs) == 0 {
-		return q2spot.Reply{Rows: []q2spot.Row{info("Nothing downloading", "Press an episode to download it")}}
+		rows := []q2spot.Row{info("Nothing downloading", "Press an episode to download it")}
+		if a.sy.held() {
+			rows = append([]q2spot.Row{act("resume", "", "Resume Downloads", "Up Next is downloaded by itself again")}, rows...)
+		}
+		return q2spot.Reply{Rows: rows}
 	}
 	var rows []q2spot.Row
 	failed := 0
@@ -688,11 +744,29 @@ func (a *app) downloads() q2spot.Reply {
 	if failed > 0 {
 		rows = append(rows, act("retryall", "", "Try Failed Again", plural(failed, "download")))
 	}
+	if waiting := len(jobs) - active(jobs); waiting > 0 { // first: a long queue's last rows are far
+		rows = append([]q2spot.Row{act("stopafter", "", "Stop After This One",
+			plural(waiting, "waiting download")+" cancelled; Up Next waits too")}, rows...)
+	}
+	if a.sy.held() {
+		rows = append([]q2spot.Row{act("resume", "", "Resume Downloads", "Up Next is downloaded by itself again")}, rows...)
+	}
 	rows = append(rows, act("cancelall", "", "Cancel All", plural(len(jobs), "download")))
 	if len(rows) > q2spot.MaxRows {
 		rows = append(rows[:q2spot.MaxRows-2], rows[len(rows)-2:]...)
 	}
 	return live(rows, "", true)
+}
+
+// active is how many of jobs are under way.
+func active(jobs []library.JobInfo) int {
+	n := 0
+	for _, j := range jobs {
+		if j.State == library.Active {
+			n++
+		}
+	}
+	return n
 }
 
 // search finds shows by name in the directory, or, for an address (a feed, a podcast's web page or

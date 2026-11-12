@@ -241,6 +241,21 @@ func (d *Downloader) CancelAll() int {
 	return n
 }
 
+// CancelWaiting drops every download but the one under way (Stop After This One); how many.
+func (d *Downloader) CancelWaiting() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := 0
+	for i := len(d.jobs) - 1; i >= 0; i-- {
+		if d.jobs[i].State != Active {
+			d.drop(i)
+			n++
+		}
+	}
+	d.save()
+	return n
+}
+
 // RetryFailed tries every failed download again; how many.
 func (d *Downloader) RetryFailed() int {
 	d.mu.Lock()

@@ -74,6 +74,8 @@ type app struct {
 	armed    map[string]time.Time // a press that asks for a second one to confirm
 	found    map[string]string    // a search result's key: what to fetch for its preview
 	loads    map[string]*load     // previews being fetched or fetched, by what was asked
+	pageAt   time.Time            // the Q2's page, last asked (device)
+	gate     time.Time            // the Q2's page opened: the menu waits for a sync to end well after it
 	rescanAt time.Time            // the episodes on the card last compared (rescan)
 	scanned  string               // and what they were: their count and bytes
 	placeMap map[uint32]int       // Q2 Pod's resume ring as last read (places), and its file's time

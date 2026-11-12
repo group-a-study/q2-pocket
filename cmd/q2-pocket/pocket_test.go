@@ -280,6 +280,37 @@ func TestSync(t *testing.T) {
 	if a.sy.allPending() {
 		t.Error("a sync through all of Up Next left Download All on")
 	}
+	// Stop After This One: the waiting downloads cancelled and Up Next held, until Resume Downloads (or
+	// Download All)
+	if r := spot(t, a, "stopafter"); !strings.HasPrefix(r.message, "Stopping after this one") || !a.sy.held() {
+		t.Errorf("stopafter: %+v", r)
+	}
+	if d := spot(t, a, "downloads"); len(d.rows) == 0 || d.rows[0][1] != "resume" {
+		t.Errorf("downloads while held: %v", d.rows)
+	}
+	if r := spot(t, a, "resume"); r.message != "Up Next downloads again" || a.sy.held() {
+		t.Errorf("resume: %+v", r)
+	}
+	a.sy.hold(true)
+	a.sy.downloadAll(true)
+	if a.sy.held() {
+		t.Error("Download All left Up Next held")
+	}
+	a.sy.downloadAll(false)
+	// The Q2's page opened (its menu asked after openGap): a sync at once, and the menu waits for it
+	a.mu.Lock()
+	a.pageAt = time.Time{}
+	a.mu.Unlock()
+	if m := spot(t, a, "menu"); len(m.rows) != 1 || m.rows[0][2] != "Syncing with Pocket Casts…" || m.message != "refresh" {
+		t.Errorf("menu as it opens: %+v", m)
+	}
+	if m := spot(t, a, "menu"); m.rows[0][2] != "Syncing with Pocket Casts…" {
+		t.Errorf("menu before the sync: %v", m.rows)
+	}
+	a.sy.once(a.ctx)
+	if m := spot(t, a, "menu"); m.rows[0][2] == "Syncing with Pocket Casts…" || m.rows[0][1] != "upnext" {
+		t.Errorf("menu after the sync: %v", m.rows)
+	}
 	// pressed: Up Next from there, an .m3u on the card for Q2 Pod to play in order
 	if r := spot(t, a, "upplay", "0"); r.message != "Playing Up Next" {
 		t.Errorf("upplay: %+v", r)

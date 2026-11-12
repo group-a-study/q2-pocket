@@ -42,11 +42,12 @@ const (
 
 // syncState is .pocket/sync.json.
 type syncState struct {
-	Eps      map[string]*epSync `json:"episodes"`               // by "<key>:<eid>"
-	Last     uint32             `json:"last,omitempty"`         // the ring's newest place, as last seen
-	Migrated bool               `json:"migrated"`               // shows subscribed by their feed found in Pocket Casts
-	All      bool               `json:"download_all,omitempty"` // Download All: the rest of Up Next still to be asked for
-	Scripts  map[string]bool    `json:"transcripts,omitempty"`  // episodes on the card whose transcript was looked for
+	Eps      map[string]*epSync `json:"episodes"`                 // by "<key>:<eid>"
+	Last     uint32             `json:"last,omitempty"`           // the ring's newest place, as last seen
+	Migrated bool               `json:"migrated"`                 // shows subscribed by their feed found in Pocket Casts
+	All      bool               `json:"download_all,omitempty"`   // Download All: the rest of Up Next still to be asked for
+	Held     bool               `json:"downloads_held,omitempty"` // Stop After This One: Up Next isn't downloaded by itself
+	Scripts  map[string]bool    `json:"transcripts,omitempty"`    // episodes on the card whose transcript was looked for
 }
 
 // epSync is an episode's place as last seen on both sides.
@@ -72,6 +73,7 @@ type syncer struct {
 	st       syncState
 	at       time.Time // the last sync that worked
 	err      string    // the last one's failure
+	failAt   time.Time // and when it failed
 	busy     bool
 	subsAt   time.Time
 	statesAt time.Time
@@ -152,6 +154,7 @@ func (s *syncer) run(ctx context.Context) {
 func (s *syncer) fail(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.failAt = time.Now()
 	switch {
 	case errors.Is(err, pocketcasts.ErrSignIn):
 		s.err = "Sign in to Pocket Casts again"
@@ -202,13 +205,14 @@ func (s *syncer) once(ctx context.Context) {
 	s.places(ctx, inprog)
 	s.nowPlaying(ctx)
 	s.starred(ctx)
-	s.download(ctx, up)
-	s.transcripts(ctx)
 	s.filePlaces(ctx)
 	s.save()
-	s.mu.Lock()
+	s.mu.Lock() // the account and the Q2 agree: synced (the app opens on it, menu)
 	s.at, s.err = time.Now(), ""
 	s.mu.Unlock()
+	s.download(ctx, up)
+	s.transcripts(ctx)
+	s.save()
 }
 
 // subscriptions makes the shows the account's: a show subscribed by its feed is found in Pocket
@@ -315,6 +319,8 @@ func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
 	n, looked, all := s.a.settings().UpNext, 0, s.allPending()
 	if all {
 		n = -1
+	} else if s.held() {
+		return // Stop After This One: nothing by itself until Resume Downloads
 	}
 	for _, e := range up {
 		if n == 0 || ctx.Err() != nil {
@@ -379,11 +385,42 @@ func (s *syncer) transcripts(ctx context.Context) {
 func (s *syncer) downloadAll(on bool) {
 	s.mu.Lock()
 	s.st.All = on
+	if on {
+		s.st.Held = false // asked for: downloads go on
+	}
 	s.mu.Unlock()
 	s.save()
 	if on {
 		s.kick()
 	}
+}
+
+// hold is Stop After This One (on) and Resume Downloads (off): while held, Up Next isn't downloaded by
+// itself (a press on an episode, or Download All, still is).
+func (s *syncer) hold(on bool) {
+	s.mu.Lock()
+	s.st.Held = on
+	s.mu.Unlock()
+	s.save()
+	if !on {
+		s.kick()
+	}
+}
+
+func (s *syncer) held() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Held
+}
+
+// failedSince is why a sync that ended after t failed, "" when none has.
+func (s *syncer) failedSince(t time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failAt.After(t) {
+		return s.err
+	}
+	return ""
 }
 
 // allPending is whether Download All is still asking for Up Next's episodes.
