@@ -311,6 +311,17 @@ func TestSync(t *testing.T) {
 	if m := spot(t, a, "menu"); m.rows[0][2] == "Syncing with Pocket Casts…" || m.rows[0][1] != "upnext" {
 		t.Errorf("menu after the sync: %v", m.rows)
 	}
+	// Q2 Podcast notes each opening of the page in /tmp/q2-pocket.open: a new note is an opening at once,
+	// however soon; the same note again (the menu shown again) isn't
+	a.opts.open = filepath.Join(t.TempDir(), "open")
+	for i, note := range []string{"100\n", "100\n", "200\n"} {
+		os.WriteFile(a.opts.open, []byte(note), 0o644)
+		gated := spot(t, a, "menu").rows[0][2] == "Syncing with Pocket Casts…"
+		if want := i != 1; gated != want {
+			t.Errorf("note %d %q: gated %v", i, note, gated)
+		}
+		a.sy.once(a.ctx)
+	}
 	// pressed: Up Next from there, an .m3u on the card for Q2 Pod to play in order
 	if r := spot(t, a, "upplay", "0"); r.message != "Playing Up Next" {
 		t.Errorf("upplay: %+v", r)

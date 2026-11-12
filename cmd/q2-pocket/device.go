@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -251,15 +252,33 @@ func (a *app) isArmed(what string) bool {
 	return ok && time.Since(at) < confirmIn
 }
 
-// openGap: the menu asked for this long after the Q2's page last asked anything is the app opened.
+// openGap: on a firmware that doesn't note its page's openings, the menu asked for this long after
+// the Q2's page last asked anything is the app opened.
 const openGap = 45 * time.Second
+
+// opening is whether the menu asked for (op) is the Q2's page just opened: Q2 Podcast writes the
+// time into /tmp/q2-pocket.open at each opening, so a note new since the last menu; without the
+// note, the menu after openGap of quiet.
+func (a *app) opening(op string) bool {
+	note, err := os.ReadFile(a.opts.open)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	quiet := a.pageAt.IsZero() || time.Since(a.pageAt) > openGap
+	a.pageAt = time.Now()
+	if op != "menu" {
+		return false
+	}
+	if err != nil {
+		return quiet
+	}
+	fresh := string(note) != a.openSeen
+	a.openSeen = string(note)
+	return fresh
+}
 
 func (a *app) device(req q2spot.Request) q2spot.Reply {
 	a.touch(false)
-	a.mu.Lock()
-	opened := req.Op == "menu" && (a.pageAt.IsZero() || time.Since(a.pageAt) > openGap)
-	a.pageAt = time.Now()
-	a.mu.Unlock()
+	opened := a.opening(req.Op)
 	if opened && a.pc.SignedIn() { // the Q2's page opened: sync with Pocket Casts at once
 		a.mu.Lock()
 		a.gate = time.Now()

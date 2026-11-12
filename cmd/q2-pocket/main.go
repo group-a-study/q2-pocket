@@ -46,6 +46,7 @@ type options struct {
 	places, play                           string // places for Q2 Pod's resume ring (sync.go), and Up Next to play (pages.go)
 	star, starred                          string // Now Playing's star asked for, and the starred episodes (sync.go)
 	library                                string // Q2 Pod's library update, asked for (rescan)
+	open                                   string // Q2 Podcast's note of the Q2's page opening (device)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
 }
@@ -75,6 +76,7 @@ type app struct {
 	found    map[string]string    // a search result's key: what to fetch for its preview
 	loads    map[string]*load     // previews being fetched or fetched, by what was asked
 	pageAt   time.Time            // the Q2's page, last asked (device)
+	openSeen string               // the page's opening note as last read
 	gate     time.Time            // the Q2's page opened: the menu waits for a sync to end well after it
 	rescanAt time.Time            // the episodes on the card last compared (rescan)
 	scanned  string               // and what they were: their count and bytes
@@ -103,6 +105,7 @@ func main() {
 	flag.StringVar(&o.star, "star-file", "/tmp/q2-star", "Now Playing's star, asked for")
 	flag.StringVar(&o.starred, "starred-file", "/tmp/q2-starred", "the downloaded episodes starred")
 	flag.StringVar(&o.library, "library-file", "/tmp/q2-pocket.library", "Q2 Pod's library update, asked for")
+	flag.StringVar(&o.open, "open-file", "/tmp/q2-pocket.open", "Q2 Podcast's note of the page opening")
 	flag.StringVar(&o.browse, "browse-socket", "/tmp/q2-pocket.browse.sock", "Q2SPOT/1 for the Q2's page")
 	flag.StringVar(&o.control, "control-socket", "/tmp/q2-pocket.sock", "datagrams: q quits")
 	flag.IntVar(&o.port, "port", 8100, "the phone page's port (the next free one if taken)")
