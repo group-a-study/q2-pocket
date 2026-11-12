@@ -474,6 +474,9 @@ func (a *app) syncGate() ([]q2spot.Row, bool) {
 			return []q2spot.Row{info("Couldn't sync with Pocket Casts", why), retry}, true
 		}
 	}
+	if _, _, busy := a.sy.status(); !busy {
+		a.sy.kick() // a sync asked for while offline went unrun: one now (the wake holds one at most)
+	}
 	return []q2spot.Row{info("Syncing with Pocket Casts…", "Pocket opens once it has synced")}, true
 }
 
