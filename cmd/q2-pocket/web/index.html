@@ -341,6 +341,7 @@ function sheet(e) {
   add(e.starred ? "Take the Star Away" : "Star", "quiet", () => act(e, e.starred ? "unstar" : "star"));
   add(e.status === 3 ? "Mark Unplayed" : "Mark Played", "quiet", () => act(e, e.status === 3 ? "unplayed" : "played"));
   if (e.onCard && e.key) add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
+  if (e.onCard && e.key) add("Remove Ads Again", "quiet", () => redo(e.key, e.eid));
   add("Description", "quiet", () => notes(e));
   add("Close", "quiet", async () => closeSheet());
   $("sheet").classList.remove("hidden");
@@ -369,6 +370,14 @@ async function notes(e) {
   $("sheet").classList.remove("hidden");
 }
 
+// Remove Ads Again (the user's, 2026-11-15): the episode downloaded again and checked for ads anew
+async function redo(key, eid) {
+  if (!confirm("Download this episode again and remove its ads anew? The one on the Q2 plays until the new one is ready.")) return;
+  try { toast((await api("redo", {key: key, eid: eid})).message); } catch (err) { toast(err.message); }
+  closeSheet();
+  refresh();
+}
+
 async function report(key, eid, title) {
   const r = await api("pc/report?key=" + encodeURIComponent(key) + "&eid=" + encodeURIComponent(eid));
   const p = $("sheetPanel");
@@ -383,6 +392,7 @@ async function report(key, eid, title) {
     p.append(t);
   } else if (!r.note) p.append(el("p", "muted", "Nothing was cut."));
   if (r.sources && r.sources.length) p.append(el("p", "muted", "Looked at: " + r.sources.join("; ")));
+  p.append(button("Remove Ads Again", "quiet", () => redo(key, eid)));
   p.append(button("Close", "quiet", async () => closeSheet()));
   $("sheet").classList.remove("hidden");
 }

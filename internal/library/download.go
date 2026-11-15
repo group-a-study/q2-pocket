@@ -56,6 +56,7 @@ type job struct {
 	tries     int // starts so far, kept in queue.json: one the app crashed in counts too
 	notBefore time.Time
 	discard   bool // cancelled: its .part goes too
+	redo      bool // on the card already: fetched again to be checked for ads again (Redo)
 }
 
 // queued is a download as queue.json keeps it.
@@ -66,6 +67,7 @@ type queued struct {
 	Tries    int    `json:",omitempty"`
 	Started  bool   `json:",omitempty"` // under way as the queue was last written
 	Plain    bool   `json:",omitempty"` // the app crashed in it: not checked for ads again (Library.plain)
+	Redo     bool   `json:",omitempty"` // on the card already, fetched again (Downloader.Redo)
 }
 
 // crashed is the failure of a download the app crashed in on each of its tries (out of memory, say,
@@ -93,11 +95,11 @@ func newDownloader(l *Library) *Downloader {
 	var last []*job // the one the app crashed in: after the others
 	for _, s := range saved {
 		e, err := l.Episode(s.Key, s.EID)
-		if err != nil || e.OnCard {
+		if err != nil || e.OnCard && !s.Redo {
 			continue
 		}
 		j := &job{JobInfo: JobInfo{Key: s.Key, EID: s.EID, Show: e.Show, Title: e.Title, Size: e.Length, Err: s.Err},
-			tries: s.Tries}
+			tries: s.Tries, redo: s.Redo}
 		if s.Plain || s.Started && l.o.Crashed {
 			l.plain.Store(s.Key+":"+s.EID, true)
 		}
@@ -130,7 +132,7 @@ func (d *Downloader) save() {
 	for _, j := range d.jobs {
 		if !j.discard {
 			_, plain := d.l.plain.Load(j.Key + ":" + j.EID)
-			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active, plain})
+			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active, plain, j.redo})
 		}
 	}
 	b, _ := json.Marshal(out)
@@ -220,6 +222,31 @@ func (d *Downloader) Queue(key, eid string) (string, error) {
 		return "Downloading", nil
 	}
 	return fmt.Sprintf("Downloading after %d more", ahead), nil
+}
+
+// Redo asks for an episode on the card again, to be checked for ads again (the user's, 2026-11-15: an
+// episode whose sponsor reads stayed): fetched as new, cleaned with every source as a first download
+// is (one the app crashed in included), and put in the old one's place once done; the old one plays
+// meanwhile. One not on the card is Queue's.
+func (d *Downloader) Redo(key, eid string) (string, error) {
+	e, err := d.l.Episode(key, eid)
+	if err != nil {
+		return "", err
+	}
+	if !e.OnCard {
+		return d.Queue(key, eid)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, j := d.find(key, eid); j != nil {
+		return "It's already downloading", nil
+	}
+	d.l.plain.Delete(key + ":" + eid)
+	d.jobs = append(d.jobs, &job{JobInfo: JobInfo{Key: key, EID: eid, Show: e.Show, Title: e.Title, Size: e.Length,
+		Note: "Downloading again to remove its ads"}, redo: true})
+	d.save()
+	d.poke()
+	return "Downloading it again to remove its ads", nil
 }
 
 // drop removes job i, its transfer stopped and its .part deleted; under d.mu.
@@ -522,7 +549,7 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	if err != nil {
 		return permanent{err}
 	}
-	if e.OnCard {
+	if e.OnCard && !j.redo {
 		return nil
 	}
 	u, err := l.source(j.Key, j.EID)

@@ -43,7 +43,7 @@ On the Q2 (**Streaming → Pocket**):
 - On [Q2 Podcast](https://github.com/group-a-study/q2-podcast), Q2 Pod made for podcasts: Now Playing's heart is the episode's star in Pocket Casts, its **Description** and **Chapters** pages show what Pocket writes beside the episode, and the side buttons skip 15 seconds back and 30 on, or hold for the chapters.
 - **Sync Now**: takes Pocket Casts' changes at once; it also does every three minutes while Pocket runs.
 
-On the phone page (the QR code): tabs for all of the above. An episode's sheet plays it next or last, takes it out of Up Next, stars it, marks it played or unplayed, downloads it, and shows **what was cut** from it: each cut's times and why. **Settings** has your account, the switches and the optional keys.
+On the phone page (the QR code): tabs for all of the above. An episode's sheet plays it next or last, takes it out of Up Next, stars it, marks it played or unplayed, downloads it, shows **what was cut** from it (each cut's times and why), and, for one on the Q2, **Remove Ads Again**: it downloads the episode again and checks it anew, the one on the Q2 playing until the new one takes its place (also on the Q2: **Ads & Sponsors → Remove Ads Again**, press an episode twice). **Settings** has your account, the switches and the optional keys.
 
 An episode's row says what was cut, "3 ads and 1 sponsor read cut (4 min)".
 
@@ -62,12 +62,13 @@ Each cut is made at a frame boundary, and a frame whose data began in a cut fram
 - **SponsorBlock**, the crowd-sourced database: the episode's **YouTube** video, or its **Spotify** episode through **Spot SponsorBlock**. They are found from the episode's show notes, or, with your own key (Settings), with the YouTube Data API or a Spotify app. Their segments are used only when the video or Spotify episode is as long as the episode (its own cut, or as downloaded), so they line up.
 - **Transcripts**: the publisher's (Podcasting 2.0) or Pocket Casts' own, read for sponsor reads ("this episode is brought to you by…", then an address or a code, to "back to the show").
 - **Chapters** named as ads or sponsors.
+- **Show notes' timestamps** naming a sponsor ("(00:17:35) Sponsors: AG1", as Huberman Lab's notes list them): each such part, to the next timestamp, on the episode as its host made it (its stitched ads cut first). A list counts with three timestamps or more, rising, the first in its first minute.
 
 Self-promotion (a show's plugs for itself) is left in unless you switch it on.
 
 **Memory.** The Q2 has little memory to spare, so the check holds 24 bytes per MP3 frame, sizes its list once from the file, reads the episodes it compares with one at a time and keeps Go's heap near 32 MB: a four-hour episode peaks at about 38 MB (v1.1 needed over 80 MB, which ended Pocket on the longest episodes). An episode too big for the memory the Q2 has free at the time goes on the card uncut, "Too long to check in the Q2's free memory".
 
-**Limits.** Only MP3 episodes are cut (nearly all podcasts; an M4A goes on the card as it came). An ad the host bakes into every copy, that no other episode carries and that isn't a separate stitched piece stays until it is learned. Sponsor reads need SponsorBlock, a transcript or chapters to know about them. Comparing copies costs a second download when the host would send other ads.
+**Limits.** Only MP3 episodes are cut (nearly all podcasts; an M4A goes on the card as it came). An ad the host bakes into every copy, that no other episode carries and that isn't a separate stitched piece stays until it is learned. Sponsor reads need SponsorBlock, a transcript, chapters or show notes' timestamps to know about them. Comparing copies costs a second download when the host would send other ads.
 
 ## Files
 

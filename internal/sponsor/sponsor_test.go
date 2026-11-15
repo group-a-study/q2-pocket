@@ -164,3 +164,29 @@ func TestFit(t *testing.T) {
 		t.Error(d)
 	}
 }
+
+// A show's notes' timestamps (Huberman Lab's, the user's episode, 2026-11-15): the sponsor reads they
+// name as segments, each to the next timestamp; a list that doesn't rise, has under three, or starts
+// late is none.
+func TestNotesChapters(t *testing.T) {
+	notes := "Thank you to our sponsors\nAG1: https://drinkag1.com/huberman\n\nTimestamps\n(00:00:00) Arthur Brooks\n" +
+		"(00:02:40) Public Science Education\n(00:17:35) Sponsors: OurPlace & Helix Sleep\n" +
+		"(00:20:41) Positive Self-Reflection\n(00:48:50) Sponsor: AG1\n(00:50:08) #2: Satisfaction, Struggle & Purpose\n"
+	ch := NotesChapters(notes)
+	if len(ch) != 6 || ch[2].From != 1055 || ch[2].Title != "Sponsors: OurPlace & Helix Sleep" {
+		t.Fatalf("chapters %+v", ch)
+	}
+	segs := AdChapters(ch, 6000)
+	if len(segs) != 2 || segs[0].From != 1055 || segs[0].To != 1241 || segs[1].From != 2930 || segs[1].To != 3008 {
+		t.Errorf("segments %+v", segs)
+	}
+	// on one line, as a feed's description reads once its tags are gone; a bare 17:35 too
+	if ch := NotesChapters("Timestamps 0:00 Intro 05:10 Sponsor: Acme 7:00 The rest"); len(ch) != 3 || ch[1].From != 310 || ch[1].Title != "Sponsor: Acme" {
+		t.Errorf("one line: %+v", ch)
+	}
+	for _, s := range []string{"(00:00:00) A\n(00:10:00) B", "(00:00:00) A\n(00:10:00) B\n(00:05:00) C", "(00:05:00) A\n(00:10:00) B\n(00:15:00) C"} {
+		if ch := NotesChapters(s); ch != nil {
+			t.Errorf("%q: %+v", s, ch)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -564,6 +565,7 @@ func (a *app) adfreePage() q2spot.Reply {
 		info("SponsorBlock", sb),
 		info("So Far", join(plural(ads, "ad")+" and "+plural(sp, "sponsor read")+" cut", length(int(sec)), "from "+plural(eps, "episode"))),
 		info("Ads Learned", fmt.Sprintf("%d, recognised wherever they play again", known)),
+		list("readd", "", "Remove Ads Again", "Download an episode again and check it for ads anew"),
 	}
 	if a.pc.SignedIn() {
 		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order; Download All on Up Next gets the rest"),
@@ -575,6 +577,45 @@ func (a *app) adfreePage() q2spot.Reply {
 }
 
 var upNextChoices = []int{-1, 0, 3, 5, 10, 20, 50}
+
+// readdPage is Ads & Sponsors' Remove Ads Again (the user's, 2026-11-15: an episode whose sponsor
+// reads stayed): the episodes on the Q2, newest first, each with what was cut from it; a press, twice,
+// downloads it again and checks it for ads anew (redo).
+func (a *app) readdPage(off int) q2spot.Reply {
+	eps, _ := a.lib.Downloaded()
+	if len(eps) == 0 {
+		return q2spot.Reply{Rows: []q2spot.Row{info("Nothing on the Q2", "Download an episode first")}}
+	}
+	sort.SliceStable(eps, func(i, j int) bool { return eps[i].Date.After(eps[j].Date) })
+	var rows []q2spot.Row
+	for _, e := range eps[min(off, len(eps)):] {
+		cut := "Nothing cut"
+		if r := clean.Load(a.opts.dir, e.Key, e.EID); r != nil {
+			if ads, sp, _ := r.Removed(); ads+sp > 0 {
+				cut = r.Summary()
+			}
+		}
+		sub := join(e.Show, cut)
+		if j := a.lib.DL.Job(e.Key, e.EID); j != nil {
+			sub = join(e.Show, "Downloading again")
+		}
+		rows = append(rows, act("redo", e.Key+":"+e.EID, e.Title, sub))
+	}
+	return live(rows, "", a.lib.DL.Busy())
+}
+
+// redo is Remove Ads Again's press on an episode: the second downloads it again (Downloader.Redo).
+func (a *app) redo(id string) q2spot.Reply {
+	key, eid, _ := strings.Cut(id, ":")
+	if !a.confirm("redo:" + id) {
+		return q2spot.Reply{Message: "Press again to download it again and remove its ads"}
+	}
+	msg, err := a.lib.DL.Redo(key, eid)
+	if err != nil {
+		return q2spot.Fail(q2spot.Error, say(err))
+	}
+	return q2spot.Reply{Message: msg}
+}
 
 // twoWayRow is the sync's setting (the user's, 2026-11-15): one-way, the Q2 takes the account's
 // changes and sends none back; two-way, the Q2's places, finished episodes and the episode it plays

@@ -322,6 +322,10 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		return a.dsub(key)
 	case "adfree":
 		return a.adfreePage()
+	case "readd":
+		return a.readdPage(0)
+	case "redo":
+		return a.redo(key)
 	case "set":
 		return a.setOption(key)
 	case "sync":

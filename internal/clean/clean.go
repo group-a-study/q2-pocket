@@ -730,6 +730,7 @@ type found struct {
 	cues     []sponsor.Cue
 	opens    bool // the transcript opens with a sponsor read
 	chapters string
+	notes    []sponsor.Chapter // its show notes' timestamps (sponsor.NotesChapters)
 	links    []string
 	used     []string
 }
@@ -759,6 +760,7 @@ func (c *Cleaner) sources(ctx context.Context, e Episode) found {
 			if f.chapters == "" {
 				f.chapters = n.ChaptersURL
 			}
+			f.notes = sponsor.NotesChapters(NotesText(n.Text))
 			yt, sp := sponsor.Links(n.Text)
 			for _, id := range yt {
 				f.links = append(f.links, "yt:"+id)
@@ -910,6 +912,21 @@ func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Se
 	if src.chapters != "" && len(dai) == 0 {
 		if b, err := c.get(ctx, src.chapters); err == nil && add(sponsor.AdChapters(sponsor.JSONChapters(b), original), sponsor.Original) {
 			rep.Sources = append(rep.Sources, "its chapters")
+		}
+	}
+	// the show notes' timestamps (the user's, 2026-11-15: Huberman Lab's sponsor reads stayed, as its
+	// notes alone say where they are, "(00:17:35) Sponsors: ..."): the episode as its host made it,
+	// so the cut episode's timeline (the download's when no advert was cut), unless the length its feed
+	// gives fits the download's alone; none past the episode's end
+	if n := len(src.notes); n > 0 && src.notes[n-1].From < kept {
+		timeline := sponsor.Clean
+		if e.Duration > 0 {
+			if fit := sponsor.Fit(float64(e.Duration), kept, original, false); fit != sponsor.Unplaced {
+				timeline = fit
+			}
+		}
+		if add(sponsor.AdChapters(src.notes, kept), timeline) {
+			rep.Sources = append(rep.Sources, "its show notes' timestamps")
 		}
 	}
 	// the transcript's reads

@@ -716,3 +716,42 @@ func TestTwoWaySync(t *testing.T) {
 		t.Errorf("back to one-way: %+v", r)
 	}
 }
+
+// Remove Ads Again (the user's, 2026-11-15): Ads & Sponsors lists the episodes on the Q2; a second press
+// downloads one again, the old one kept until the new one lands in its place, checked for ads anew.
+func TestRemoveAdsAgain(t *testing.T) {
+	a, _, _ := startSigned(t)
+	ctx := context.Background()
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		a.sy.once(ctx)
+		if e, _ := a.lib.PCEpisode(podA, epA1); e.OnCard {
+			break
+		}
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("not downloaded: %+v", a.lib.DL.Jobs())
+		}
+	}
+	findRow(t, spot(t, a, "adfree"), "Remove Ads Again")
+	e1, _ := a.lib.PCEpisode(podA, epA1)
+	id := e1.Key + ":" + e1.EID
+	page := spot(t, a, "readd")
+	if row := findRow(t, page, e1.Title); row[1] != "redo" || row[4] != id {
+		t.Fatalf("row %v", row)
+	}
+	before, _ := os.Stat(e1.Path)
+	if r := spot(t, a, "redo", id); r.message != "Press again to download it again and remove its ads" {
+		t.Errorf("first press: %+v", r)
+	}
+	if r := spot(t, a, "redo", id); r.message != "Downloading it again to remove its ads" {
+		t.Fatalf("second press: %+v", r)
+	}
+	for start := time.Now(); a.lib.DL.Job(e1.Key, e1.EID) != nil; time.Sleep(20 * time.Millisecond) {
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("still downloading: %+v", a.lib.DL.Jobs())
+		}
+	}
+	after, err := os.Stat(e1.Path)
+	if e, _ := a.lib.PCEpisode(podA, epA1); err != nil || !e.OnCard || os.SameFile(before, after) {
+		t.Errorf("not in its place anew: %v, on card %v, same file %v", err, e.OnCard, err == nil && os.SameFile(before, after))
+	}
+}

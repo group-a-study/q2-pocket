@@ -396,6 +396,41 @@ func AdChapters(ch []Chapter, length float64) []Segment {
 
 func strconvQuote(s string) string { return "“" + strings.TrimSpace(s) + "”" }
 
+// noteStamp is a show notes' timestamp: "(00:17:35)", "00:17:35 -", "17:35", with what follows it on
+// its line the chapter's title.
+var noteStamp = regexp.MustCompile(`(?:^|[\s(\[])\(?\[?((?:\d{1,2}:)?\d{1,2}:\d{2})\]?\)?[ \t]*[-–—:|]?[ \t]*`)
+
+// NotesChapters reads the chapters a show's notes list as timestamps (Huberman Lab's "(00:17:35)
+// Sponsors: OurPlace & Helix Sleep"): the episode as its host made it, without the adverts its
+// host's server puts in. A list is at least three timestamps, rising, the first within its first
+// minute; else none.
+func NotesChapters(text string) []Chapter {
+	idx := noteStamp.FindAllStringSubmatchIndex(text, -1)
+	var out []Chapter
+	for i, m := range idx {
+		end := len(text)
+		if i+1 < len(idx) {
+			end = idx[i+1][0]
+		}
+		title := text[m[1]:end]
+		if nl := strings.IndexAny(title, "\n\r"); nl >= 0 {
+			title = title[:nl]
+		}
+		if title = strings.TrimSpace(title); title == "" {
+			continue
+		}
+		at := clock(text[m[2]:m[3]])
+		if len(out) > 0 && at <= out[len(out)-1].From {
+			return nil // not a list of the episode's parts
+		}
+		out = append(out, Chapter{From: at, Title: title})
+	}
+	if len(out) < 3 || out[0].From > 60 {
+		return nil
+	}
+	return out
+}
+
 // JSONChapters reads Podcasting 2.0 chapters.
 func JSONChapters(b []byte) []Chapter {
 	var r struct {

@@ -327,6 +327,13 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(rw, http.StatusOK, map[string]string{"message": msg})
+	case route == "redo" && post: // Remove Ads Again: on the card, downloaded again and checked anew
+		msg, err := lib.DL.Redo(body.Key, body.EID)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(rw, http.StatusOK, map[string]string{"message": msg})
 	case route == "cancel" && post: // kept off: Up Next won't fetch it again by itself
 		lib.DL.Cancel(body.Key, body.EID)
 		w.a.sy.keepOff(body.Key+":"+body.EID, true)
