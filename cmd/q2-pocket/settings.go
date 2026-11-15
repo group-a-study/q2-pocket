@@ -21,7 +21,8 @@ type settings struct {
 	Sponsors     bool `json:"remove_sponsor_reads"`
 	SelfPromo    bool `json:"remove_self_promotion"`
 	Copy         bool `json:"compare_copies"`
-	UpNext       int  `json:"download_up_next"` // Up Next kept downloaded: -1 all, else its first this many
+	UpNext       int  `json:"download_up_next"`    // Up Next kept downloaded: -1 all, else its first this many
+	NextCount    int  `json:"download_next_count"` // Download Next's: the next this many of Up Next not on the Q2
 	DeletePlayed bool `json:"delete_played"`
 	Version      int  `json:"settings_version"` // settingsVersion once loadSettings has brought it up to date
 
@@ -34,12 +35,28 @@ type settings struct {
 // All on the Up Next page fetches the rest once.
 const upNextFirst = 10
 
+// nextFirst is Download Next's count unless chosen otherwise (nextChoices).
+const nextFirst = 5
+
+// nextChoices are the counts Download Next's Play/Pause hold and setting go through.
+var nextChoices = []int{1, 3, 5, 10, 20}
+
+// nextCount is s's Download Next count, one of nextChoices.
+func (s settings) nextCount() int {
+	for _, n := range nextChoices {
+		if n == s.NextCount {
+			return n
+		}
+	}
+	return nextFirst
+}
+
 // settingsVersion 2: Up Next's default became its first upNextFirst, not all of it, so a config
 // saved before (which holds the old default, -1) takes the new one once.
 const settingsVersion = 2
 
 func defaults() settings {
-	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: upNextFirst}
+	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: upNextFirst, NextCount: nextFirst}
 }
 
 // loadSettings reads config.json, making the key and PIN the first time; they stay, so a phone

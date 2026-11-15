@@ -53,6 +53,12 @@ type syncState struct {
 	// whose episode has left Up Next (taken off in Pocket Casts) is cancelled.
 	Queued map[string]string `json:"up_next_downloads,omitempty"`
 	Owned  bool              `json:"up_next_owned,omitempty"` // the queue an older version left taken as Up Next's
+	// Kept off the Q2 by the user, by "<key>:<eid>": a download cancelled, an episode deleted (here,
+	// on the phone page, or by Q2 Podcast). Up Next never fetches one by itself again (the user's,
+	// 2026-11-15: a cancelled episode that crashed Pocket came back with the next sync); a press on
+	// it does, and takes it off this list.
+	Off  map[string]bool `json:"kept_off,omitempty"`
+	Next int             `json:"download_next,omitempty"` // Download Next: this many more still to be asked for
 }
 
 // epSync is an episode's place as last seen on both sides.
@@ -210,6 +216,7 @@ func (s *syncer) once(ctx context.Context) {
 		return
 	}
 	s.setList("inprog", inprog, nil)
+	s.doneNotes(ctx)
 	s.places(ctx, inprog)
 	s.nowPlaying(ctx)
 	s.starred(ctx)
@@ -385,44 +392,112 @@ func cmpOr(a, b string) string {
 }
 
 // download keeps Up Next downloaded: all of it (UpNext < 0), or its first UpNext episodes; all of it
-// once while Download All is on, which a pass through the whole of Up Next ends. A sync looks up at
+// once while Download All is on, which a pass through the whole of Up Next ends; and Download Next's
+// count of the episodes after those not on the Q2 yet. Never one the user kept off (cancelled or
+// deleted: keptOff; the user's, 2026-11-15: a cancelled episode that crashed Pocket was fetched again
+// by the next sync, and crashed it again): a press on it fetches it. A sync looks up at
 // most newPerSync episodes the library doesn't have yet (their shows fetched first), and asks for
 // another sync soon while more are left: a long Up Next takes a while, places first.
 func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
 	s.leftUpNext(up)
 	n, looked, all := s.a.settings().UpNext, 0, s.allPending()
+	s.mu.Lock()
+	next := s.st.Next
+	s.mu.Unlock()
 	if all {
 		n = -1
 	} else if s.held() {
-		return // Stop After This One: nothing by itself until Resume Downloads
+		n = 0 // Stop After This One: nothing by itself until Resume Downloads (Download Next still)
 	}
 	for _, e := range up {
-		if n == 0 || ctx.Err() != nil {
-			return
+		if n == 0 && next == 0 || ctx.Err() != nil {
+			break
 		}
 		if e.Show() == pocketcasts.FilesPodcast {
 			continue
 		}
-		n--
+		kept := n != 0
+		if kept {
+			n--
+		}
 		ep, err := s.a.lib.PCEpisode(e.Show(), e.UUID)
 		if err != nil {
 			if looked == newPerSync {
 				s.again()
+				s.setNext(next)
 				return
 			}
 			looked++
 			ep, err = s.episode(ctx, e)
 		}
-		if err == nil && !ep.OnCard && ep.Job == nil {
-			s.a.lib.DL.Queue(ep.Key, ep.EID)
-			s.mu.Lock()
-			s.st.Queued[ep.Key+":"+ep.EID] = e.UUID
-			s.mu.Unlock()
+		if err != nil || ep.OnCard || ep.Job != nil || s.keptOff(ep.Key+":"+ep.EID) {
+			continue
+		}
+		if !kept {
+			next--
+		}
+		s.a.lib.DL.Queue(ep.Key, ep.EID)
+		s.mu.Lock()
+		s.st.Queued[ep.Key+":"+ep.EID] = e.UUID
+		s.mu.Unlock()
+	}
+	if ctx.Err() == nil {
+		s.setNext(0) // as many as Up Next had: Download Next is done
+		if all {     // every episode of Up Next asked for: Download All is done
+			s.downloadAll(false)
 		}
 	}
-	if all && ctx.Err() == nil { // every episode of Up Next asked for: Download All is done
-		s.downloadAll(false)
+}
+
+// keptOff is whether the user kept the episode id ("<key>:<eid>") off the Q2.
+func (s *syncer) keptOff(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Off[id]
+}
+
+// keepOff notes the episode id kept off the Q2 (cancelled, deleted), or not (on false: asked for
+// again by a press), saved.
+func (s *syncer) keepOff(id string, off bool) {
+	s.mu.Lock()
+	if s.st.Off == nil {
+		s.st.Off = map[string]bool{}
 	}
+	changed := s.st.Off[id] != off
+	if off {
+		s.st.Off[id] = true
+	} else {
+		delete(s.st.Off, id)
+	}
+	s.mu.Unlock()
+	if changed {
+		s.save()
+	}
+}
+
+// setNext is Download Next's count still to go, saved.
+func (s *syncer) setNext(n int) {
+	s.mu.Lock()
+	changed := s.st.Next != n
+	s.st.Next = n
+	s.mu.Unlock()
+	if changed {
+		s.save()
+	}
+}
+
+// downloadNext is Download Next: the next n episodes of Up Next not on the Q2 yet, after those
+// it keeps downloaded, asked for by the next sync (now).
+func (s *syncer) downloadNext(n int) {
+	s.setNext(n)
+	s.kick()
+}
+
+// nextPending is Download Next's count still to go.
+func (s *syncer) nextPending() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Next
 }
 
 // transcriptsPerSync is how many episodes on the card a sync looks up a transcript for.
@@ -626,6 +701,71 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// doneNotes takes Q2 Podcast's notes (its /mnt/data/ringnav-done: "F\t<path>" an episode played to
+// its end on the Q2, "D\t<path>" a file deleted there). A finished one is marked played in Pocket
+// Casts and leaves Up Next, as the apps do at an episode's end (the user's, 2026-11-15: what was
+// heard on the Q2 stayed in the phone's Up Next, since a place the Q2 forgets at the end looked like
+// none); a deleted one is kept off the Q2 (keptOff). The file is taken (renamed) first, so a note
+// written meanwhile waits for the next sync; one Pocket Casts couldn't take is put back.
+func (s *syncer) doneNotes(ctx context.Context) {
+	path := s.a.opts.done
+	if path == "" {
+		return
+	}
+	taken := path + ".taking"
+	if _, err := os.Stat(taken); err != nil { // none left by a sync cut short
+		if os.Rename(path, taken) != nil {
+			return
+		}
+	}
+	b, err := os.ReadFile(taken)
+	if err != nil {
+		return
+	}
+	pc := s.a.pc
+	var left []string
+	for _, line := range strings.Split(string(b), "\n") {
+		kind, p, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		e, found := s.a.lib.ByPath(p)
+		if !ok || !found {
+			continue
+		}
+		id := e.Key + ":" + e.EID
+		if kind == "D" {
+			s.keepOff(id, true)
+			continue
+		}
+		if kind != "F" || e.PC == "" || e.Feed.PC == "" {
+			continue
+		}
+		if ctx.Err() != nil || pc.SetStatus(ctx, e.PC, e.Feed.PC, pocketcasts.Played) != nil {
+			left = append(left, line)
+			continue
+		}
+		pc.UpNextRemove(ctx, e.Feed.PC)
+		logf("%q played to its end on the Q2: marked played in Pocket Casts, out of Up Next", e.Title)
+		s.mu.Lock()
+		st := s.st.Eps[id]
+		if st == nil {
+			st = &epSync{PC: -1}
+			s.st.Eps[id] = st
+		}
+		st.Q2, st.Done = 0, true
+		s.upAt = time.Time{} // Up Next changed: the pages ask again
+		s.mu.Unlock()
+		if e.OnCard {
+			s.played(e)
+		}
+	}
+	if len(left) > 0 {
+		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			f.WriteString(strings.Join(left, "\n") + "\n")
+			f.Close()
+		}
+	}
+	os.Remove(taken)
 }
 
 // played deletes a played episode's download when the settings say, unless Up Next wants it.

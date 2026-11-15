@@ -35,6 +35,9 @@ button.quiet, .button.quiet { background: transparent; color: var(--accent); bor
 button.bad { background: transparent; color: var(--bad); border: 1px solid var(--line); }
 button.icon { padding: 6px 10px; background: transparent; color: var(--muted); border: 1px solid var(--line); }
 button:disabled { opacity: 0.5; cursor: default; }
+#upnextAll { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+#upnextAll:empty { display: none; }
+select.count { flex: 0 0 auto; width: auto; padding: 8px 12px; border-radius: 999px; }
 .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
 .tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -393,6 +396,27 @@ function renderUpNext(d) {
     toast((await api("pc/downloadall", {})).message);
     refresh();
   }));
+  // Download Next (the user's, 2026-11-15): the next few of Up Next not on the Q2 yet, after those it keeps downloaded
+  if (!d.loading && d.episodes.length && d.nextLeft > 0) all.append(button("Stop Downloading the Next " + d.nextLeft, "quiet", async () => {
+    toast((await api("pc/downloadnext", {count: 0})).message);
+    refresh();
+  }));
+  else if (!d.loading && d.episodes.length) {
+    const pick = el("select", "count");
+    pick.setAttribute("aria-label", "How many to download next");
+    for (const n of d.nextChoices || [1, 3, 5, 10, 20]) {
+      const o = el("option", "", String(n));
+      o.value = n;
+      if (n === d.nextCount) o.selected = true;
+      pick.append(o);
+    }
+    pick.onclick = e => e.stopPropagation();
+    const next = button("Download Next", "quiet", async () => {
+      toast((await api("pc/downloadnext", {count: Number(pick.value)})).message);
+      refresh();
+    });
+    all.append(next, pick);
+  }
   if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Up Next is empty."));
   for (const e of d.episodes.slice(0, 200)) list.append(pcRow(e));
   if (d.episodes.length > 200) list.append(el("div", "empty", "…and " + (d.episodes.length - 200) + " more"));

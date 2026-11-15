@@ -117,6 +117,9 @@ type Library struct {
 	fileMu    sync.Mutex // a file put in place (retagged, downloaded) only if not deleted meanwhile
 	covers    covers
 	retagging atomic.Bool
+	// plain: downloads ("<key>:<eid>") the app crashed in: their next try isn't checked for ads
+	// (cleanTo), the likeliest part to run out of memory, so a broken or huge episode still lands
+	plain sync.Map
 }
 
 // ShowInfo is a show as the pages show it.
@@ -424,6 +427,27 @@ func (l *Library) Episode(key, eid string) (EpisodeInfo, error) {
 	e := l.episode(s, s.c.Episodes[i])
 	l.mu.Unlock()
 	return l.mark([]EpisodeInfo{e})[0], nil
+}
+
+// ByPath is the episode whose file on the card is (or was) path, as Q2 Podcast names it: its show's
+// folder and its name, matched as FAT matches them, ignoring case.
+func (l *Library) ByPath(path string) (EpisodeInfo, bool) {
+	dir, base := filepath.Dir(path), filepath.Base(path)
+	l.mu.Lock()
+	for _, s := range l.shows {
+		if s.c == nil || !strings.EqualFold(filepath.Join(l.o.Root, s.Folder), dir) {
+			continue
+		}
+		for eid, name := range s.names {
+			if i, ok := s.index[eid]; ok && strings.EqualFold(name, base) {
+				e := l.episode(s, s.c.Episodes[i])
+				l.mu.Unlock()
+				return l.mark([]EpisodeInfo{e})[0], true
+			}
+		}
+	}
+	l.mu.Unlock()
+	return EpisodeInfo{}, false
 }
 
 // source is where an episode's audio is fetched from.

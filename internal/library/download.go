@@ -65,6 +65,7 @@ type queued struct {
 	Err      string `json:",omitempty"`
 	Tries    int    `json:",omitempty"`
 	Started  bool   `json:",omitempty"` // under way as the queue was last written
+	Plain    bool   `json:",omitempty"` // the app crashed in it: not checked for ads again (Library.plain)
 }
 
 // crashed is the failure of a download the app crashed in on each of its tries (out of memory, say,
@@ -97,6 +98,9 @@ func newDownloader(l *Library) *Downloader {
 		}
 		j := &job{JobInfo: JobInfo{Key: s.Key, EID: s.EID, Show: e.Show, Title: e.Title, Size: e.Length, Err: s.Err},
 			tries: s.Tries}
+		if s.Plain || s.Started && l.o.Crashed {
+			l.plain.Store(s.Key+":"+s.EID, true)
+		}
 		switch {
 		case s.Failed:
 			j.State = Failed
@@ -106,9 +110,9 @@ func newDownloader(l *Library) *Downloader {
 			j.State, j.Err = Failed, crashed
 			l.logf("download %q of %s: Pocket crashed on it each of %d tries: skipped", e.Title, e.Show, j.tries)
 		case s.Started:
-			j.Err = "Pocket crashed on it: trying again after the others"
-			l.logf("download %q of %s: Pocket crashed on it (try %d of %d): it goes after the others", e.Title, e.Show,
-				j.tries, tries)
+			j.Err = "Pocket crashed on it: trying again after the others, without the ad check"
+			l.logf("download %q of %s: Pocket crashed on it (try %d of %d): it goes after the others, not checked for ads",
+				e.Title, e.Show, j.tries, tries)
 			last = append(last, j)
 			continue
 		}
@@ -125,7 +129,8 @@ func (d *Downloader) save() {
 	out := []queued{}
 	for _, j := range d.jobs {
 		if !j.discard {
-			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active})
+			_, plain := d.l.plain.Load(j.Key + ":" + j.EID)
+			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active, plain})
 		}
 	}
 	b, _ := json.Marshal(out)

@@ -321,20 +321,22 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		}
 		reply(rw, http.StatusOK, map[string]bool{"ok": true})
 	case route == "download" && post:
-		msg, err := lib.DL.Queue(body.Key, body.EID)
+		msg, err := w.a.get(body.Key, body.EID)
 		if err != nil {
 			fail(err)
 			return
 		}
 		reply(rw, http.StatusOK, map[string]string{"message": msg})
-	case route == "cancel" && post:
+	case route == "cancel" && post: // kept off: Up Next won't fetch it again by itself
 		lib.DL.Cancel(body.Key, body.EID)
+		w.a.sy.keepOff(body.Key+":"+body.EID, true)
 		reply(rw, http.StatusOK, map[string]bool{"ok": true})
 	case route == "delete" && post:
 		if err := lib.Delete(body.Key, body.EID); err != nil {
 			fail(err)
 			return
 		}
+		w.a.sy.keepOff(body.Key+":"+body.EID, true)
 		reply(rw, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		http.NotFound(rw, r)

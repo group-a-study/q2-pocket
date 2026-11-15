@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -141,7 +142,7 @@ func startSignedWith(t *testing.T, ready func() bool) (*app, string, *pcFake) {
 	// a sync each time the test asks, not on the loop's clock
 	o := options{dir: dir, card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"),
 		play: filepath.Join(socks, "play"), browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"),
-		star: filepath.Join(socks, "star"), starred: filepath.Join(socks, "starred"),
+		star: filepath.Join(socks, "star"), starred: filepath.Join(socks, "starred"), done: filepath.Join(socks, "ringnav-done"),
 		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: ready}
 	a, err := start(o)
 	if err != nil {
@@ -263,10 +264,11 @@ func TestSync(t *testing.T) {
 
 	// the pages
 	up := spot(t, a, "upnext")
-	if len(up.rows) != 3 || up.rows[0][1] != "dlall" || up.rows[0][2] != "Download All" || up.rows[0][3] != "Every episode is on the Q2" {
+	if len(up.rows) != 4 || up.rows[0][1] != "dlall" || up.rows[0][2] != "Download All" || up.rows[0][3] != "Every episode is on the Q2" ||
+		up.rows[1][1] != "dlnext" || up.rows[1][2] != "Download Next 5" || up.rows[1][5] != "nextn" {
 		t.Fatalf("Up Next page: %v", up.rows)
 	}
-	up.rows = up.rows[1:] // Download All first, then the episodes
+	up.rows = up.rows[2:] // Download All and Download Next first, then the episodes
 	if up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[1][4] != "1" || up.rows[0][5] != "unq:"+podA+":"+epA2 {
 		t.Errorf("Up Next page: %v", up.rows)
 	}
@@ -486,5 +488,102 @@ func TestNewReleasesFirst(t *testing.T) {
 	spot(t, a, "upf:"+podA+":"+epA3)
 	if put := f.saw("/up_next/play_next"); len(put) != 1 || put[0]["episode"].(map[string]any)["uuid"] != epA3 {
 		t.Fatalf("play_next: %v", put)
+	}
+}
+
+// Q2 Podcast's notes, a cancel and Download Next (the user's, 2026-11-15): an episode played to its
+// end on the Q2 is marked played in Pocket Casts and leaves Up Next, though Pocket wasn't running
+// near its end; one deleted there, or cancelled here, isn't fetched by Up Next again; Download Next
+// asks for the next few not on the Q2, after those Up Next keeps downloaded.
+func TestNotesKeptOffAndDownloadNext(t *testing.T) {
+	a, _, f := startSigned(t)
+	ctx := context.Background()
+	waiting := func(id string) bool {
+		e, _ := a.lib.PCEpisode(podA, id)
+		return e.OnCard || e.Job != nil
+	}
+	onCard := func(ids ...string) {
+		t.Helper()
+		for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+			a.sy.once(ctx)
+			all := true
+			for _, id := range ids {
+				e, _ := a.lib.PCEpisode(podA, id)
+				all = all && e.OnCard
+			}
+			if all {
+				return
+			}
+			if time.Since(start) > 15*time.Second {
+				t.Fatalf("not downloaded %v: %+v", ids, a.lib.DL.Jobs())
+			}
+		}
+	}
+	onCard(epA2, epA1) // Up Next's two, kept downloaded
+	// a third in Up Next, past the two kept: Download Next 1 asks for it
+	f.mu.Lock()
+	f.upnext = []string{epA2, epA1, epA3}
+	f.mu.Unlock()
+	a.change(func(s *settings) { s.UpNext, s.NextCount = 2, 1 })
+	a.sy.forget()
+	a.sy.once(ctx)
+	if waiting(epA3) {
+		t.Fatal("past the two kept, fetched by itself")
+	}
+	if r := spot(t, a, "dlnext"); r.message != "Downloading the next 1 episode" {
+		t.Errorf("dlnext: %+v", r)
+	}
+	a.sy.once(ctx)
+	if !waiting(epA3) || a.sy.nextPending() != 0 {
+		t.Errorf("Download Next didn't ask for the third, or stayed on (%d)", a.sy.nextPending())
+	}
+	// its Play/Pause hold: the next count
+	if r := spot(t, a, "nextn"); r.message != "Download Next: 3 episodes" || a.settings().nextCount() != 3 {
+		t.Errorf("nextn: %+v", r)
+	}
+	// deleted (Play/Pause held twice), it's kept off: not fetched again by Up Next, even all of it; a
+	// cancel keeps one off too
+	onCard(epA3)
+	e3, _ := a.lib.PCEpisode(podA, epA3)
+	spot(t, a, "del:"+e3.Key+":"+e3.EID)
+	if r := spot(t, a, "del:"+e3.Key+":"+e3.EID); r.message != "Deleted" {
+		t.Fatalf("del: %+v", r)
+	}
+	spot(t, a, "cancel", "x:y")
+	if !a.sy.keptOff("x:y") {
+		t.Error("a cancel doesn't keep it off")
+	}
+	a.change(func(s *settings) { s.UpNext = -1 })
+	a.sy.once(ctx)
+	if waiting(epA3) {
+		t.Error("a cancelled episode fetched again by Up Next")
+	}
+	if up := spot(t, a, "upnext"); !strings.Contains(fmt.Sprint(up.rows), "Kept off the Q2 · Download") {
+		t.Errorf("Up Next page doesn't say it's kept off: %v", up.rows)
+	}
+	// Q2 Podcast's notes: the second finished on the Q2, the first deleted there
+	e1, _ := a.lib.PCEpisode(podA, epA1)
+	e2, _ := a.lib.PCEpisode(podA, epA2)
+	os.WriteFile(a.opts.done, []byte("F\t"+e2.Path+"\nD\t"+e1.Path+"\n"), 0o644)
+	a.sy.once(ctx)
+	played := false
+	for _, b := range f.saw("/sync/update_episode") {
+		played = played || b["uuid"] == epA2 && b["status"] == 3.0
+	}
+	f.mu.Lock()
+	removed := strings.Join(f.removed, ",")
+	f.mu.Unlock()
+	if !played || !strings.Contains(removed, epA2) {
+		t.Errorf("finished on the Q2: played %v, removed from Up Next %q", played, removed)
+	}
+	if !a.sy.keptOff(e1.Key + ":" + e1.EID) {
+		t.Error("deleted on the Q2, but not kept off")
+	}
+	if _, err := os.Stat(a.opts.done); err == nil {
+		t.Error("the notes stayed")
+	}
+	// a press fetches a kept-off episode, and it isn't kept off any more
+	if r := spot(t, a, "get", e3.Key+":"+e3.EID); r.message == "" || a.sy.keptOff(e3.Key+":"+e3.EID) {
+		t.Errorf("get: %+v, kept off %v", r, a.sy.keptOff(e3.Key+":"+e3.EID))
 	}
 }

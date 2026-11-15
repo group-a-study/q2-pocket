@@ -86,6 +86,7 @@ type pcBody struct {
 
 	Ads, Sponsors, SelfPromo, Copy, DeletePlayed *bool
 	UpNext                                       *int
+	Count                                        int // Download Next's (0: stop)
 	YouTubeKey, SpotifyID, SpotifySecret         *string
 }
 
@@ -178,7 +179,24 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 			a.sy.kick()
 		}
 		reply(rw, http.StatusOK, map[string]any{"loading": at.IsZero(), "episodes": w.pcEpisodes(up),
-			"downloadingAll": a.sy.allPending()})
+			"downloadingAll": a.sy.allPending(), "nextLeft": a.sy.nextPending(), "nextCount": a.settings().nextCount(),
+			"nextChoices": nextChoices})
+	case route == "downloadnext" && post: // Up Next's Download Next, as the Q2's: count, or 0 to stop
+		if body.Count <= 0 {
+			a.sy.setNext(0)
+			reply(rw, http.StatusOK, map[string]any{"message": "Stopped downloading the next episodes"})
+			return
+		}
+		body.Count = min(body.Count, 50)
+		a.change(func(s *settings) {
+			for _, c := range nextChoices {
+				if c == body.Count {
+					s.NextCount = c
+				}
+			}
+		})
+		a.sy.downloadNext(body.Count)
+		reply(rw, http.StatusOK, map[string]any{"message": "Downloading the next " + plural(body.Count, "episode")})
 	case route == "downloadall" && post: // Up Next's Download All, as the Q2's (no second press: the page asks)
 		on := !a.sy.allPending()
 		a.sy.downloadAll(on)

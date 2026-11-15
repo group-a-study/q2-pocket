@@ -296,6 +296,7 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		if err := a.lib.Delete(k, eid); err != nil {
 			return q2spot.Fail(q2spot.Error, say(err))
 		}
+		a.sy.keepOff(id, true) // Up Next won't fetch it again by itself
 		return ok("Deleted")
 	}
 	if id, ok := strings.CutPrefix(req.Op, "upq:"); ok { // Play/Pause held: into Up Next
@@ -340,13 +341,17 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		return a.upPlay(key)
 	case "dlall":
 		return a.dlAll()
+	case "dlnext":
+		return a.dlNext()
+	case "nextn":
+		return a.nextMore()
 	case "caps":
 		var rows []q2spot.Row
 		for _, op := range []string{"menu", "shows", "show", "opts", "latest", "downloaded", "downloads", "search",
 			"preview", "get", "cancel", "del", "sub", "refresh", "refresh1", "auto", "getlatest", "wipe", "unsub",
 			"retryall", "cancelall", "stop", "sleep", "setsleep", "upnext", "inprog", "new", "starred", "history",
 			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "upf", "unq", "upplay",
-			"dlall", "stopafter", "resume"} {
+			"dlall", "dlnext", "nextn", "stopafter", "resume"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}
 		return q2spot.Reply{Message: version, Rows: rows}
@@ -385,14 +390,15 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 
 	case "get":
 		k, eid, _ := strings.Cut(key, ":")
-		msg, err := a.lib.DL.Queue(k, eid)
+		msg, err := a.get(k, eid)
 		if err != nil {
 			return q2spot.Fail(q2spot.Unavailable, say(err))
 		}
 		return ok(msg)
-	case "cancel":
+	case "cancel": // kept off: Up Next won't fetch it again by itself (a press still does)
 		k, eid, _ := strings.Cut(key, ":")
 		a.lib.DL.Cancel(k, eid)
+		a.sy.keepOff(k+":"+eid, true)
 		return ok("Download cancelled")
 	case "sub":
 		return a.subscribe(key)

@@ -60,7 +60,11 @@ func (a *app) pcRow(e pocketcasts.Episode, hold, ctx string, places map[uint32]i
 	if getting {
 		return q2spot.Row{Kind: "info", Title: e.Title, Subtitle: join(show, "Getting it ready…"), Position: hold}
 	}
-	return q2spot.Row{Kind: "action", URI: "pcget", Context: pcID(e), Title: e.Title, Subtitle: join(when, "Download"), Position: hold}
+	press := "Download"
+	if err == nil && a.sy.keptOff(ep.Key+":"+ep.EID) { // Up Next doesn't fetch it by itself (syncer.download)
+		press = "Kept off the Q2 · Download"
+	}
+	return q2spot.Row{Kind: "action", URI: "pcget", Context: pcID(e), Title: e.Title, Subtitle: join(when, press), Position: hold}
 }
 
 // pcPage is a list of episodes as rows, from off, and the cursor for More….
@@ -112,8 +116,8 @@ func (a *app) upNextPage(off int) q2spot.Reply {
 			}
 		}
 	}
-	if off == 0 && a.settings().UpNext >= 0 { // all of it kept downloaded anyway: no button
-		rows = append([]q2spot.Row{a.allRow(eps)}, rows...)
+	if off == 0 && a.settings().UpNext >= 0 { // all of it kept downloaded anyway: no buttons
+		rows = append([]q2spot.Row{a.allRow(eps), a.nextRow()}, rows...)
 	}
 	return live(rows, next, a.anyMoving(eps) || a.sy.allPending())
 }
@@ -135,6 +139,51 @@ func (a *app) allRow(eps []pocketcasts.Episode) q2spot.Row {
 		sub = plural(left, "episode") + " not on the Q2 yet"
 	}
 	return act("dlall", "", "Download All", sub)
+}
+
+// nextRow is the Up Next page's Download Next (the user's, 2026-11-15): the next few episodes of Up
+// Next not on the Q2 yet, after those it keeps downloaded, asked for by a press; Play/Pause held
+// on it changes how many (nextChoices). While they're being asked for, a press stops it.
+func (a *app) nextRow() q2spot.Row {
+	n := a.settings().nextCount()
+	if left := a.sy.nextPending(); left > 0 {
+		return q2spot.Row{Kind: "action", URI: "dlnext", Title: "Downloading the Next " + strconv.Itoa(left),
+			Subtitle: "Press to stop", Position: "nextn"}
+	}
+	return q2spot.Row{Kind: "action", URI: "dlnext", Title: "Download Next " + strconv.Itoa(n),
+		Subtitle: "The next " + plural(n, "episode") + " not on the Q2 · Hold Play/Pause for more or fewer", Position: "nextn"}
+}
+
+// dlNext is Download Next's press: the next few asked for, or stopped while they are.
+func (a *app) dlNext() q2spot.Reply {
+	if !a.pc.SignedIn() {
+		return q2spot.Fail(q2spot.Login, "Sign in to Pocket Casts on the phone page first")
+	}
+	if a.sy.nextPending() > 0 {
+		a.sy.setNext(0)
+		return q2spot.Reply{Message: "Stopped downloading the next episodes"}
+	}
+	n := a.settings().nextCount()
+	a.sy.downloadNext(n)
+	return q2spot.Reply{Message: "Downloading the next " + plural(n, "episode")}
+}
+
+// nextMore is Download Next's Play/Pause hold, and its setting's press: the next count of nextChoices.
+func (a *app) nextMore() q2spot.Reply {
+	n := 0
+	err := a.change(func(s *settings) {
+		cur, next := s.nextCount(), nextChoices[0]
+		for i, c := range nextChoices {
+			if c == cur && i+1 < len(nextChoices) {
+				next = nextChoices[i+1]
+			}
+		}
+		s.NextCount, n = next, next
+	})
+	if err != nil {
+		return q2spot.Fail(q2spot.Error, "Couldn't save the setting")
+	}
+	return q2spot.Reply{Message: "Download Next: " + plural(n, "episode")}
 }
 
 // dlAll is Download All's press: on after a second press, off while it runs.
@@ -256,7 +305,7 @@ func (a *app) pcGet(id string) q2spot.Reply {
 		return q2spot.Fail(q2spot.Unavailable, "That episode isn't in the list any more")
 	}
 	if ep, err := a.lib.PCEpisode(e.Show(), e.UUID); err == nil {
-		msg, err := a.lib.DL.Queue(ep.Key, ep.EID)
+		msg, err := a.get(ep.Key, ep.EID)
 		if err != nil {
 			return q2spot.Fail(q2spot.Unavailable, say(err))
 		}
@@ -272,13 +321,19 @@ func (a *app) pcGet(id string) q2spot.Reply {
 		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
 		defer cancel()
 		if ep, err := a.sy.episode(ctx, e); err == nil {
-			a.lib.DL.Queue(ep.Key, ep.EID)
+			a.get(ep.Key, ep.EID)
 		}
 		a.pending.Lock()
 		delete(a.getting, e.UUID)
 		a.pending.Unlock()
 	}()
 	return q2spot.Reply{Message: "Downloading"}
+}
+
+// get is a press's download: the episode asked for, no longer kept off the Q2 (keptOff).
+func (a *app) get(key, eid string) (string, error) {
+	a.sy.keepOff(key+":"+eid, false)
+	return a.lib.DL.Queue(key, eid)
 }
 
 // upNextAdd puts an episode at the end of Up Next.
@@ -510,6 +565,7 @@ func (a *app) adfreePage() q2spot.Reply {
 	}
 	if a.pc.SignedIn() {
 		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order; Download All on Up Next gets the rest"),
+			act("set", "nextn", "Download Next: "+plural(s.nextCount(), "Episode"), "How many Download Next on Up Next asks for"),
 			act("set", "deleteplayed", "Delete Played Episodes: "+onOff(s.DeletePlayed), "Once Pocket Casts marks them played"))
 	}
 	return q2spot.Reply{Rows: rows}
@@ -533,6 +589,15 @@ func (a *app) setOption(name string) q2spot.Reply {
 		case "copy":
 			s.Copy = !s.Copy
 			msg = "Second copy: " + onOff(s.Copy)
+		case "nextn":
+			cur, next := s.nextCount(), nextChoices[0]
+			for i, c := range nextChoices {
+				if c == cur && i+1 < len(nextChoices) {
+					next = nextChoices[i+1]
+				}
+			}
+			s.NextCount = next
+			msg = "Download Next: " + plural(next, "episode")
 		case "deleteplayed":
 			s.DeletePlayed = !s.DeletePlayed
 			msg = "Delete played: " + onOff(s.DeletePlayed)

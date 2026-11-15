@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.3"
+const version = "q2-v1.4"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -47,6 +47,7 @@ type options struct {
 	star, starred                          string // Now Playing's star asked for, and the starred episodes (sync.go)
 	library                                string // Q2 Pod's library update, asked for (rescan)
 	open                                   string // Q2 Podcast's note of the Q2's page opening (device)
+	done                                   string // Q2 Podcast's notes of episodes finished or deleted there (sync.go)
 	port                                   int
 	ready                                  func() bool // downloads may run; tests replace the Wi-Fi and card check
 	crashed                                bool        // the last run ended in a crash, as its launcher saw
@@ -100,6 +101,7 @@ func main() {
 	flag.StringVar(&o.card, "card", "/mnt/mmc", "the card's mount point")
 	flag.StringVar(&o.statusFile, "status-file", "/tmp/q2-pocket.state", "the status file Q2 Pod reads")
 	flag.StringVar(&o.resume, "resume-file", "/mnt/data/ringnav-resume", "Q2 Pod's places in what it played")
+	flag.StringVar(&o.done, "done-file", "/mnt/data/ringnav-done", "Q2 Podcast's notes of episodes finished or deleted there")
 	flag.StringVar(&o.sleep, "sleep-file", "/tmp/q2-pocket.sleep", "the Sleep Timer's request to Q2 Pod")
 	flag.StringVar(&o.places, "places-file", "/tmp/q2-pocket.places", "places for Q2 Pod's resume ring")
 	flag.StringVar(&o.play, "play-file", "/tmp/q2-pocket.play", "a playlist for Q2 Pod to play")

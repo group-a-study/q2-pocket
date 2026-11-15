@@ -104,6 +104,10 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 	if l.o.Clean == nil {
 		return errUncut
 	}
+	if _, crashed := l.plain.Load(e.Key + ":" + e.EID); crashed { // the app crashed checking it: tagged only
+		note("Left as it came: Pocket crashed checking it for ads")
+		return errUncut
+	}
 	defer func() {
 		if p := recover(); p != nil { // a file broken some way not foreseen: it goes in uncut
 			os.Remove(dst)
