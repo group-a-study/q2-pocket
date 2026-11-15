@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"q2-pocket/internal/clean"
 	"q2-pocket/internal/q2"
 )
 
@@ -556,6 +557,10 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	if err != nil {
 		return permanent{err}
 	}
+	var old *clean.Report // a redo: what the copy it replaces had cut
+	if j.redo && e.OnCard && l.o.Clean != nil {
+		old = clean.Load(l.o.Clean.Dir, j.Key, j.EID)
+	}
 	err = l.transfer(ctx, u, e, l.partPath(j.Key, j.EID), progress, note)
 	var no refused
 	if errors.As(err, &no) {
@@ -565,6 +570,12 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	}
 	if errors.As(err, &no) {
 		return permanent{err}
+	}
+	if err == nil && j.redo && e.OnCard {
+		l.changed()
+		if l.o.Replaced != nil && l.o.Clean != nil {
+			l.o.Replaced(e.Path, clean.Recut(old, clean.Load(l.o.Clean.Dir, j.Key, j.EID)))
+		}
 	}
 	return err
 }

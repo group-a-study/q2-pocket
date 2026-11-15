@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -145,23 +146,56 @@ func TestNotMP3(t *testing.T) {
 }
 
 // An episode too big for the memory the Q2 has free goes in as it came, unchecked, rather than
-// taking the app down with it.
+// taking the app down with it; one whose frames fit but not the ad check has its sponsor reads cut
+// alone. The memory is reckoned by its frames, not its bytes (a 320 kbps episode has fewer a MB).
 func TestTooBigForMemory(t *testing.T) {
 	dir := t.TempDir()
 	part := filepath.Join(dir, "ep.part")
 	_, b := fixture(t, "content.mp3")
 	os.WriteFile(part, b, 0o644)
+	frames := mp3.FramesIn(part)
+	s, _ := mp3.ScanFile(part)
+	if s == nil || frames < len(s.Frames) || frames > len(s.Frames)*5/4+16 {
+		t.Fatal("frames", frames, s)
+	}
 	asked := 0
 	c := &Cleaner{Dir: dir, Settings: func() Settings { return Settings{Ads: true} },
-		Free: func() int64 { asked++; return memoryFor(int64(len(b))) - 1 }}
+		Free: func() int64 { asked++; return scanFor(frames) - 1 }}
 	if ed, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); ed != nil || err != nil || asked != 1 {
 		t.Fatal(ed, err, asked)
 	}
 	if r := Load(dir, "k", "e"); r == nil || r.Summary() != "Too long to check in the Q2's free memory: left as it came" {
 		t.Errorf("%+v", r)
 	}
-	c.Free = func() int64 { return memoryFor(int64(len(b))) }
+	c.Free = func() int64 { return memoryFor(frames) - 1 }
+	if _, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if r := Load(dir, "k", "e"); r == nil || r.Note != "" || !slices.Contains(r.Sources, "ads not checked: too little of the Q2's memory free") {
+		t.Errorf("%+v", r)
+	}
+	c.Free = func() int64 { return memoryFor(frames) }
 	if ed, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); ed == nil || err != nil {
 		t.Fatal("room enough: checked", ed, err)
+	}
+}
+
+// What a new copy leaves out of the old one (Recut), in the old copy's seconds: with an old copy as
+// it came, every cut of the new download; else the new sponsor reads, less those the old copy had
+// cut, both copies' adverts taken as cut alike.
+func TestRecut(t *testing.T) {
+	ad, read := func(f, t float64) Cut { return Cut{From: f, To: t, Kind: "ad"} }, func(f, t float64) Cut { return Cut{From: f, To: t, Kind: "sponsor"} }
+	now := &Report{Cuts: []Cut{ad(10, 20), read(100, 160)}}
+	if got := Recut(nil, now); !slices.Equal(got, [][2]float64{{10, 20}, {100, 160}}) {
+		t.Errorf("as it came: %v", got)
+	}
+	if got := Recut(&Report{Cuts: []Cut{ad(30, 45)}}, now); !slices.Equal(got, [][2]float64{{90, 150}}) {
+		t.Errorf("its adverts cut: %v", got)
+	}
+	if got := Recut(&Report{Cuts: []Cut{ad(10, 20), read(100, 130)}}, now); !slices.Equal(got, [][2]float64{{90, 120}}) {
+		t.Errorf("a read cut already: %v", got)
+	}
+	if Recut(&Report{Cuts: []Cut{ad(10, 20), read(100, 160)}}, now) != nil || Recut(nil, nil) != nil {
+		t.Error("nothing new")
 	}
 }

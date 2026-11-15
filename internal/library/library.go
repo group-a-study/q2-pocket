@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,6 +57,9 @@ type Options struct {
 	// switched off) and is not
 	Crashed bool
 	Hold    func() bool // downloads wait while it is true (the app's first sync); nil never
+	// Replaced: a copy on the card replaced by a new one, cut again (Remove Ads Again), the seconds
+	// of the old copy the new one leaves out (clean.Recut); nil for none
+	Replaced func(path string, cuts [][2]float64)
 }
 
 func (l *Library) logf(format string, args ...any) {
@@ -117,6 +121,9 @@ type Library struct {
 	fileMu    sync.Mutex // a file put in place (retagged, downloaded) only if not deleted meanwhile
 	covers    covers
 	retagging atomic.Bool
+	// changes counts the episodes on the card changed in place (retagged, cut again), kept in
+	// changesPath across starts: Q2 Pod's library is asked to read them again (Changes)
+	changes atomic.Int64
 	// plain: downloads ("<key>:<eid>") the app crashed in: their next try isn't checked for ads
 	// (cleanTo), the likeliest part to run out of memory, so a broken or huge episode still lands
 	plain sync.Map
@@ -167,6 +174,10 @@ func Open(o Options) (*Library, error) {
 		}
 	}
 	l := &Library{o: o}
+	if b, err := os.ReadFile(l.changesPath()); err == nil {
+		n, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		l.changes.Store(n)
+	}
 	var outlines []feed.Outline
 	if b, err := os.ReadFile(l.opmlPath()); err == nil {
 		if outlines, err = feed.ParseOPML(bytes.NewReader(b)); err != nil {
@@ -205,7 +216,20 @@ func Open(o Options) (*Library, error) {
 	return l, nil
 }
 
-func (l *Library) opmlPath() string            { return filepath.Join(l.o.Dir, "subscriptions.opml") }
+func (l *Library) opmlPath() string    { return filepath.Join(l.o.Dir, "subscriptions.opml") }
+func (l *Library) changesPath() string { return filepath.Join(l.o.Dir, "changes") }
+
+// Changes is how many times episodes on the card have changed in place (a new tag, a new cut), ever:
+// a new count means Q2 Pod's library has some to read again.
+func (l *Library) Changes() int64 { return l.changes.Load() }
+
+func (l *Library) changed() {
+	n := l.changes.Add(1)
+	p := l.changesPath()
+	if os.WriteFile(p+".tmp", []byte(strconv.FormatInt(n, 10)), 0o644) == nil {
+		os.Rename(p+".tmp", p)
+	}
+}
 func (l *Library) cachePath(key string) string { return filepath.Join(l.o.Dir, "feeds", key+".json") }
 func (l *Library) partPath(key, eid string) string {
 	return filepath.Join(l.o.Dir, "partial", key+"-"+eid+".part")

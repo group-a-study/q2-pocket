@@ -139,14 +139,71 @@ func frameID(id string) bool {
 	return true
 }
 
-// Needs is whether the tag lacks what the Q2 shows: a title, an artist or an album, or a cover when
-// there is one to give.
-func (h *Head) Needs(cover bool) bool {
-	return !h.has["TIT2"] || !h.has["TPE1"] || !h.has["TALB"] || cover && !h.has["APIC"]
+// Needs is whether the tag lacks what the Q2 shows: a title, an artist or an album, or a cover it can
+// show when there is one to give; or whether its title isn't the episode's (i's, when it has one:
+// the user's, 2026-11-16, an Acast episode's own tag, stitched on with its theme song, named it
+// "THEME SONG").
+func (h *Head) Needs(i Info, cover bool) bool {
+	return !h.has["TIT2"] || !h.has["TPE1"] || !h.has["TALB"] || cover && (!h.has["APIC"] || h.OddCover()) ||
+		h.retitle(i)
 }
 
 // HasCover is whether the tag has a picture.
 func (h *Head) HasCover() bool { return h.has["APIC"] }
+
+// OddCover is whether the tag's picture isn't a JPEG (Very Bad Wizards' is a PNG): Q2 Pod's lists
+// read only a JPEG, so they showed none (Cover Flow's reader takes any).
+func (h *Head) OddCover() bool {
+	b := h.picture()
+	return b != nil && !(len(b) >= 3 && b[0] == 0xff && b[1] == 0xd8 && b[2] == 0xff)
+}
+
+// Picture is the tag's picture's bytes (its first), nil for none.
+func (h *Head) Picture() []byte { return h.picture() }
+
+// picture is the first APIC frame's image: past its encoding, MIME type, picture type and
+// description (ended by a 0, two in UTF-16).
+func (h *Head) picture() []byte {
+	for _, fr := range h.frames {
+		if string(fr[:4]) != "APIC" || len(fr) < 14 {
+			continue
+		}
+		body := fr[10:]
+		enc := body[0]
+		m := bytes.IndexByte(body[1:], 0)
+		if m < 0 || 1+m+2 > len(body) {
+			return nil
+		}
+		desc := body[1+m+2:]
+		if enc == 1 || enc == 2 {
+			for k := 0; k+1 < len(desc); k += 2 {
+				if desc[k] == 0 && desc[k+1] == 0 {
+					return desc[k+2:]
+				}
+			}
+			return nil
+		}
+		if d := bytes.IndexByte(desc, 0); d >= 0 {
+			return desc[d+1:]
+		}
+		return nil
+	}
+	return nil
+}
+
+// title is the tag's own title (its first TIT2), "" for none.
+func (h *Head) title() string {
+	for _, fr := range h.frames {
+		if string(fr[:4]) == "TIT2" {
+			return textOf(fr[10:])
+		}
+	}
+	return ""
+}
+
+// retitle is whether the tag's title gives way to i's (Pocket Casts' and the feed's name for the
+// episode, which its rows show): when it has one and the tag's differs.
+func (h *Head) retitle(i Info) bool { return i.Title != "" && h.title() != i.Title }
 
 // Big is whether a tag was past maxTag: not read, so a new tag would lose it.
 func (h *Head) Big() bool { return h.big }
@@ -156,12 +213,28 @@ func (h *Head) Big() bool { return h.big }
 var shown = map[string]bool{"TIT2": true, "TPE1": true, "TALB": true, "TPE2": true, "TCON": true, "TDRC": true,
 	"TYER": true, "TRCK": true, "APIC": true}
 
-// Build is the new start of the file: one tag, the publisher's frames the Q2 shows and those missing
-// from them, then the rest of theirs, then any tag kept whole.
-func (h *Head) Build(i Info, cover []byte) []byte {
+// Build is the new start of the file: one tag, the episode's title (i's, when the tag's differs),
+// the publisher's frames the Q2 shows and those missing from them, the cover given in place of none
+// or of one the Q2 can't show, then the rest of the publisher's, then any tag kept whole.
+func (h *Head) Build(i Info, cover []byte) []byte { return h.build(i, cover, 0) }
+
+// BuildIn is Build's start padded to take size bytes exactly, the tags' room in the file now, so it
+// can be written over them in place; nil when it doesn't fit.
+func (h *Head) BuildIn(i Info, cover []byte, size int64) []byte {
+	if size <= 0 {
+		return nil
+	}
+	return h.build(i, cover, size)
+}
+
+func (h *Head) build(i Info, cover []byte, size int64) []byte {
 	var f bytes.Buffer
+	retitle, recover := h.retitle(i), len(cover) > 0 && (!h.has["APIC"] || h.OddCover())
+	if retitle {
+		f.Write(h.frame("TIT2", h.text(i.Title)))
+	}
 	for _, fr := range h.frames {
-		if shown[string(fr[:4])] {
+		if id := string(fr[:4]); shown[id] && !(retitle && id == "TIT2") && !(recover && id == "APIC") {
 			f.Write(fr)
 		}
 	}
@@ -170,7 +243,6 @@ func (h *Head) Build(i Info, cover []byte) []byte {
 			f.Write(h.frame(id, h.text(s)))
 		}
 	}
-	add("TIT2", i.Title)
 	add("TPE1", cmp.Or(i.Author, i.Show))
 	add("TALB", i.Show)
 	add("TCON", "Podcast")
@@ -181,7 +253,7 @@ func (h *Head) Build(i Info, cover []byte) []byte {
 			add("TYER", i.Date.Format("2006"))
 		}
 	}
-	if len(cover) > 0 && !h.has["APIC"] {
+	if recover {
 		apic := append([]byte{0}, "image/jpeg"...) // ISO-8859-1 for the (empty) description
 		apic = append(apic, 0, 3, 0)               // the MIME type's end, a front cover, no description
 		f.Write(h.frame("APIC", append(apic, cover...)))
@@ -191,7 +263,17 @@ func (h *Head) Build(i Info, cover []byte) []byte {
 			f.Write(fr)
 		}
 	}
-	f.Write(make([]byte, padding))
+	pad := int64(padding)
+	if size > 0 {
+		tail := int64(0)
+		for _, t := range h.after {
+			tail += int64(len(t))
+		}
+		if pad = size - 10 - int64(f.Len()) - tail; pad < 0 || int64(f.Len())+pad > 0x0fffffff {
+			return nil
+		}
+	}
+	f.Write(make([]byte, pad))
 	out := []byte{'I', 'D', '3', h.version, 0, 0, 0, 0, 0, 0}
 	putSyncsafe(out[6:10], f.Len())
 	out = append(out, f.Bytes()...)

@@ -118,10 +118,18 @@ func (c *Cleaner) logf(format string, args ...any) {
 	}
 }
 
-// memoryFor is about the memory a check of an MP3 of size bytes takes besides what the app has: its
-// frames (24 bytes each, a frame being about 400 bytes at 128 kbps), their hashes, another
-// episode's and the matching's tables. Measured on a four-hour episode (230 MB): about 29 MB.
-func memoryFor(size int64) int64 { return size / 8 }
+// memoryFor is about the memory a check for ads of an MP3 of n frames takes besides what the app has:
+// its frames (24 bytes each), their hashes, another episode's and the matching's tables, about 52
+// bytes a frame in all (measured on a four-hour episode at 128 kbps: 551,000 frames, 230 MB, about
+// 29 MB). By its frames, not its bytes (the user's, 2026-11-16: Huberman Lab's 2 h 50 at 320 kbps,
+// 409 MB, read as 51 MB by its size, is 391,000 frames, about 21 MB; it was left as it came, its
+// ads and sponsor reads in, and Remove Ads Again left it so again).
+func memoryFor(frames int) int64 { return int64(frames)*56 + slack }
+
+// scanFor is what reading its frames alone takes, on which the sponsor reads are cut.
+func scanFor(frames int) int64 { return int64(frames)*24 + slack }
+
+const slack = 1 << 20 // the check's own besides its tables
 
 func (c *Cleaner) path(kind, key, eid, ext string) string {
 	return filepath.Join(c.Dir, kind, key+"-"+eid+ext)
@@ -141,14 +149,20 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		return nil, nil
 	}
 	note("Checking for ads")
-	if st, err := os.Stat(part); err == nil && c.Free != nil {
-		if free := c.Free(); free >= 0 && free < memoryFor(st.Size()) {
-			c.logf("%q: %d MB, too big to check in the %d MB of memory free: left as it came", e.Title,
-				st.Size()>>20, free>>20)
+	noAds := false // too little memory free for the ad check: the sponsor reads alone
+	if frames := mp3.FramesIn(part); frames > 0 && c.Free != nil {
+		if free := c.Free(); free >= 0 && free < scanFor(frames) {
+			c.logf("%q: %d frames, too many to read in the %d MB of memory free: left as it came", e.Title,
+				frames, free>>20)
 			rep.Note = "Too long to check in the Q2's free memory: left as it came"
 			c.save(e, rep)
 			c.uncutTranscript(ctx, e)
 			return nil, nil
+		} else if free >= 0 && free < memoryFor(frames) && set.Ads {
+			c.logf("%q: %d frames, too many to check for ads in the %d MB of memory free: sponsor reads only",
+				e.Title, frames, free>>20)
+			noAds = true
+			rep.Sources = append(rep.Sources, "ads not checked: too little of the Q2's memory free")
 		}
 	}
 	s, err := mp3.ScanFile(part)
@@ -165,7 +179,7 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	rep.Sources = append(rep.Sources, src.used...)
 
 	var dai []adfree.Cut
-	if set.Ads {
+	if set.Ads && !noAds {
 		ev := adfree.Evidence{Opens: src.opens, Now: time.Now()}
 		if e.Duration > 0 {
 			ev.Budget = float64(e.Duration)
@@ -552,6 +566,71 @@ func (r *Report) Original(at float64) float64 {
 	for _, k := range r.Cuts { // in order: each cut before the point moves it on
 		if k.From <= out {
 			out += k.To - k.From
+		}
+	}
+	return out
+}
+
+// Recut is what a new copy of an episode (its report now) leaves out of the copy it replaces (its
+// report then; nil, or one that cut nothing, for a copy as it came): seconds [from, to) of the old
+// copy, in order (the user's, 2026-11-16: Remove Ads Again on the episode playing, which Q2 Pod
+// then plays on from the same moment). With no old cuts, the old copy is taken as the new download
+// was, every cut of the new one its own. Else both copies' adverts are taken as cut alike, the
+// episode itself their timeline: the new copy's sponsor reads the old one hadn't cut, where they
+// are in it.
+func Recut(old, now *Report) [][2]float64 {
+	if now == nil {
+		return nil
+	}
+	var out [][2]float64
+	if old == nil || len(old.Cuts) == 0 {
+		for _, k := range now.Cuts {
+			out = append(out, [2]float64{k.From, k.To})
+		}
+		return out
+	}
+	reads := func(r *Report) [][2]float64 { // its sponsor reads, in the episode without its adverts
+		ads := &Report{}
+		for _, k := range r.Cuts {
+			if k.Kind == "ad" {
+				ads.Cuts = append(ads.Cuts, k)
+			}
+		}
+		var out [][2]float64
+		for _, k := range r.Cuts {
+			if f, t := ads.Kept(k.From), ads.Kept(k.To); k.Kind != "ad" && t > f {
+				out = append(out, [2]float64{f, t})
+			}
+		}
+		return out
+	}
+	was := reads(old)
+	gone := &Report{} // the old copy's reads, as cuts of the episode: the old copy's timeline
+	for _, k := range was {
+		gone.Cuts = append(gone.Cuts, Cut{From: k[0], To: k[1]})
+	}
+	for _, k := range reads(now) {
+		parts := [][2]float64{k}
+		for _, w := range was { // less what the old copy had cut already
+			var left [][2]float64
+			for _, p := range parts {
+				if w[1] <= p[0] || w[0] >= p[1] {
+					left = append(left, p)
+					continue
+				}
+				if p[0] < w[0] {
+					left = append(left, [2]float64{p[0], w[0]})
+				}
+				if w[1] < p[1] {
+					left = append(left, [2]float64{w[1], p[1]})
+				}
+			}
+			parts = left
+		}
+		for _, p := range parts {
+			if f, t := gone.Kept(p[0]), gone.Kept(p[1]); t > f {
+				out = append(out, [2]float64{f, t})
+			}
 		}
 	}
 	return out

@@ -3,10 +3,12 @@ package library
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -293,7 +295,7 @@ func TestTagged(t *testing.T) {
 		t.Helper()
 		got, _ := os.ReadFile(e.Path)
 		h, err := tag.Read(e.Path)
-		if err != nil || h.Needs(true) || !h.HasCover() || !bytes.HasSuffix(got, mp3Audio(n)) ||
+		if err != nil || h.Needs(tag.Info{Title: e.Title}, true) || !h.HasCover() || !bytes.HasSuffix(got, mp3Audio(n)) ||
 			!bytes.Contains(got, []byte(e.Title)) || !bytes.Contains(got, []byte("Test & Show: Live")) || !bytes.Contains(got, []byte("Ann")) {
 			t.Fatalf("%s: %v", e.Title, err)
 		}
@@ -312,6 +314,48 @@ func TestTagged(t *testing.T) {
 	check(eps[1], "1")
 	if n := l.Retag(context.Background()); n != 0 {
 		t.Fatal("retagged again", n)
+	}
+}
+
+// An episode whose own tag names it otherwise (the user's, 2026-11-16: an Acast episode's, stitched on
+// with its theme song, said "THEME SONG") takes the episode's title, and a PNG picture (Very Bad
+// Wizards', which Q2 Pod's lists can't show) becomes a JPEG; a new tag that fits the old one's room
+// is written over it in place. Each counts as a change Q2 Pod's library reads again (Changes).
+func TestRetitled(t *testing.T) {
+	f, dir := newFake(t), t.TempDir()
+	f.mp3.Store(true)
+	l := open(t, dir)
+	si, _ := l.Subscribe(context.Background(), f.URL+"/feed.xml")
+	eps, _ := l.Episodes(si.Key)
+	var p bytes.Buffer
+	png.Encode(&p, image.NewRGBA(image.Rect(0, 0, 64, 64)))
+	frame := func(id string, body []byte) []byte {
+		fr := append([]byte(id), 0, 0, 0, 0, 0, 0)
+		binary.BigEndian.PutUint32(fr[4:8], uint32(len(body)))
+		return append(fr, body...)
+	}
+	body := append(frame("TIT2", []byte("\x00THEME SONG")), frame("TPE1", []byte("\x00Book Cheat"))...)
+	body = append(append(body, frame("TALB", []byte("\x00Book Cheat"))...), frame("APIC", append([]byte("\x00image/png\x00\x03\x00"), p.Bytes()...))...)
+	body = append(body, make([]byte, 4096)...)
+	head := []byte{'I', 'D', '3', 3, 0, 0, 0, 0, 0, byte(len(body) & 0x7f)}
+	head[8], head[7] = byte(len(body)>>7&0x7f), byte(len(body)>>14&0x7f)
+	os.MkdirAll(filepath.Dir(eps[1].Path), 0o755)
+	file := append(append(head, body...), mp3Audio("1")...)
+	os.WriteFile(eps[1].Path, file, 0o644)
+	if n := l.Retag(context.Background()); n != 1 || l.Changes() != 1 {
+		t.Fatal("retagged", n, l.Changes())
+	}
+	got, _ := os.ReadFile(eps[1].Path)
+	h, err := tag.Read(eps[1].Path)
+	if err != nil || len(got) != len(file) || !bytes.HasSuffix(got, mp3Audio("1")) || h.Needs(tag.Info{Title: eps[1].Title}, true) ||
+		h.OddCover() || !h.HasCover() || !bytes.Contains(got, []byte(eps[1].Title)) || bytes.Contains(got, []byte("THEME SONG")) {
+		t.Fatalf("%v: %d bytes for %d", err, len(got), len(file))
+	}
+	if n := l.Retag(context.Background()); n != 0 || l.Changes() != 1 {
+		t.Fatal("retagged again", n)
+	}
+	if open(t, dir).Changes() != 1 { // kept across starts
+		t.Fatal("changes forgotten")
 	}
 }
 

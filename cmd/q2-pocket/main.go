@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.8"
+const version = "q2-v1.9"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -44,6 +44,7 @@ type options struct {
 	resume                                 string // Q2 Pod's places in what it played (resume.go)
 	sleep                                  string // the Sleep Timer's request to Q2 Pod (sleep.go)
 	places, play                           string // places for Q2 Pod's resume ring (sync.go), and Up Next to play (pages.go)
+	recut                                  string // an episode cut again (Remove Ads Again), for Q2 Pod playing it (resume.go)
 	star, starred                          string // Now Playing's star asked for, and the starred episodes (sync.go)
 	library                                string // Q2 Pod's library update, asked for (rescan)
 	open                                   string // Q2 Podcast's note of the Q2's page opening (device)
@@ -103,6 +104,7 @@ func main() {
 	flag.StringVar(&o.done, "done-file", "/mnt/data/ringnav-done", "Q2 Podcast's notes of episodes finished or deleted there")
 	flag.StringVar(&o.sleep, "sleep-file", "/tmp/q2-pocket.sleep", "the Sleep Timer's request to Q2 Pod")
 	flag.StringVar(&o.places, "places-file", "/tmp/q2-pocket.places", "places for Q2 Pod's resume ring")
+	flag.StringVar(&o.recut, "recut-file", "/tmp/q2-pocket.recut", "an episode cut again, for Q2 Pod playing it")
 	flag.StringVar(&o.play, "play-file", "/tmp/q2-pocket.play", "a playlist for Q2 Pod to play")
 	flag.StringVar(&o.star, "star-file", "/tmp/q2-star", "Now Playing's star, asked for")
 	flag.StringVar(&o.starred, "starred-file", "/tmp/q2-starred", "the downloaded episodes starred")
@@ -187,17 +189,18 @@ func start(o options) (*app, error) {
 		Settings: func() clean.Settings { return a.cleanSettings() },
 		Free:     memFree, Log: logMem}
 	lib, err := library.Open(library.Options{
-		Dir:     o.dir,
-		Root:    filepath.Join(o.card, "Podcasts"),
-		Client:  &http.Client{Transport: feeds, Timeout: 60 * time.Second},
-		Fetch:   &http.Client{Transport: tlsroots.Transport()},
-		Agent:   agent,
-		Ready:   o.ready,
-		PC:      pc,
-		Clean:   cl,
-		Log:     logMem,
-		Crashed: o.crashed,
-		Hold:    func() bool { return a.sy.holding() },
+		Dir:      o.dir,
+		Root:     filepath.Join(o.card, "Podcasts"),
+		Client:   &http.Client{Transport: feeds, Timeout: 60 * time.Second},
+		Fetch:    &http.Client{Transport: tlsroots.Transport()},
+		Agent:    agent,
+		Ready:    o.ready,
+		PC:       pc,
+		Clean:    cl,
+		Log:      logMem,
+		Crashed:  o.crashed,
+		Hold:     func() bool { return a.sy.holding() },
+		Replaced: func(path string, cuts [][2]float64) { a.replaced(path, cuts) },
 	})
 	if err != nil {
 		return nil, err
@@ -291,7 +294,7 @@ const rescanEvery = time.Minute
 // lists Episodes, Starred and Recently Played from it. A Q2 Pod without card apps' library updates
 // (caps "library") is left alone.
 func (a *app) rescan() {
-	if !q2.HasCap("library") {
+	if !q2.HasCap("library") || a.lib.Retagging() { // a retag pass asks once it's done
 		return
 	}
 	for _, j := range a.lib.DL.Jobs() {
@@ -300,7 +303,7 @@ func (a *app) rescan() {
 		}
 	}
 	eps, bytes := a.lib.Downloaded()
-	mark := fmt.Sprintf("%d %d", len(eps), bytes)
+	mark := fmt.Sprintf("%d %d %d", len(eps), bytes, a.lib.Changes()) // Changes: retagged, cut again
 	if mark == a.scanned {
 		return
 	}

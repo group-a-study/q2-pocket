@@ -43,7 +43,7 @@ On the Q2 (**Streaming → Pocket**):
 - On [Q2 Podcast](https://github.com/group-a-study/q2-podcast), Q2 Pod made for podcasts: Now Playing's heart is the episode's star in Pocket Casts, its **Description** and **Chapters** pages show what Pocket writes beside the episode, and the side buttons skip 15 seconds back and 30 on, or hold for the chapters.
 - **Sync Now**: takes Pocket Casts' changes at once; it also does every three minutes while Pocket runs.
 
-On the phone page (the QR code): tabs for all of the above. An episode's sheet plays it next or last, takes it out of Up Next, stars it, marks it played or unplayed, downloads it, shows **what was cut** from it (each cut's times and why), and, for one on the Q2, **Remove Ads Again**: it downloads the episode again and checks it anew, the one on the Q2 playing until the new one takes its place (also on the Q2: **Ads & Sponsors → Remove Ads Again**, press an episode twice). **Settings** has your account, the switches and the optional keys.
+On the phone page (the QR code): tabs for all of the above. An episode's sheet plays it next or last, takes it out of Up Next, stars it, marks it played or unplayed, downloads it, shows **what was cut** from it (each cut's times and why), and, for one on the Q2, **Remove Ads Again**: it downloads the episode again and checks it anew, the one on the Q2 playing until the new one takes its place; if it is playing then, Q2 Podcast goes on from the same moment of the new copy (also on the Q2: **Ads & Sponsors → Remove Ads Again**, press an episode twice). **Settings** has your account, the switches and the optional keys.
 
 An episode's row says what was cut, "3 ads and 1 sponsor read cut (4 min)".
 
@@ -66,7 +66,7 @@ Each cut is made at a frame boundary, and a frame whose data began in a cut fram
 
 Self-promotion (a show's plugs for itself) is left in unless you switch it on.
 
-**Memory.** The Q2 has little memory to spare, so the check holds 24 bytes per MP3 frame, sizes its list once from the file, reads the episodes it compares with one at a time and keeps Go's heap near 32 MB: a four-hour episode peaks at about 38 MB (v1.1 needed over 80 MB, which ended Pocket on the longest episodes). An episode too big for the memory the Q2 has free at the time goes on the card uncut, "Too long to check in the Q2's free memory".
+**Memory.** The Q2 has little memory to spare, so the check holds 24 bytes per MP3 frame, sizes its list once from the file, reads the episodes it compares with one at a time and keeps Go's heap near 32 MB: a four-hour episode peaks at about 38 MB (v1.1 needed over 80 MB, which ended Pocket on the longest episodes). What a check needs goes by the episode's frames, about 56 bytes each, not its size (a 320 kbps episode has a quarter of the frames a MB that a 128 kbps one has). With too little memory free for the ad check, the sponsor reads are still cut ("ads not checked: too little of the Q2's memory free"); with too little even to read the frames, the episode goes on the card uncut, "Too long to check in the Q2's free memory".
 
 **Limits.** Only MP3 episodes are cut (nearly all podcasts; an M4A goes on the card as it came). An ad the host bakes into every copy, that no other episode carries and that isn't a separate stitched piece stays until it is learned. Sponsor reads need SponsorBlock, a transcript, chapters or show notes' timestamps to know about them. Comparing copies costs a second download when the host would send other ads.
 
@@ -76,10 +76,10 @@ Everything besides the app is kept over updates and removal:
 
 - `.pocket/config.json`: the phone page's key and PIN, the switches, `download_up_next` (10 unless chosen; -1 all), `delete_played`, `idle_minutes`, and the optional `youtube_api_key`, `spotify_client_id`, `spotify_client_secret`.
 - `.pocket/account.json`: the Pocket Casts session (delete it to sign out). `.pocket/sync.json`: each episode's place as last synced, and the Q2's Up Next (its order, what your account's had, those finished on the Q2).
-- `.pocket/subscriptions.opml`: your shows (Pocket Casts ids kept in their own attributes), `.pocket/feeds/`, `.pocket/queue.json`, `.pocket/partial/`.
+- `.pocket/subscriptions.opml`: your shows (Pocket Casts ids kept in their own attributes), `.pocket/feeds/`, `.pocket/queue.json`, `.pocket/partial/`. `.pocket/changes`: how many times episodes on the card changed in place (retagged, cut again), so Q2 Pod's library reads them again.
 - `Podcasts/<Show>/.description/`: each episode's description, as text, for Now Playing.
 - `.pocket/ads.bin`: the ads learned. `.pocket/frames/`: recent episodes' frames, to compare new ones with. `.pocket/cuts/`: what was cut from each episode and why, which also maps a place in the cut episode to the episode as served, so places sync with your other devices.
-- `Podcasts/<Show>/2024-10-07 - Episode Title.mp3`: the episodes. `Podcasts/Pocket Casts Files/`: uploaded files.
+- `Podcasts/<Show>/2024-10-07 - Episode Title.mp3`: the episodes, tagged with the episode's title as Pocket Casts has it (a publisher's own tag can name it otherwise: an Acast episode's said "THEME SONG", from the theme song stitched on its front) and a JPEG cover (Q2 Podcast's lists show no PNG). Episodes already on the card are tagged so in the background, in place when the new tag fits. `Podcasts/Pocket Casts Files/`: uploaded files.
 - `q2-pocket.log` at the card's root (`q2-pocket.old.log` before it, 512 KB each): the debug log. Each start, with what the run before left (a crash's message, the launcher's restarts and exit codes); each sync and why one failed; each download, its steps with the memory then, and how it ended; memory every minute; and why Pocket stopped. Send it along when something goes wrong.
 
 ## Build

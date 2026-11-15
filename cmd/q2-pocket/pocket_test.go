@@ -143,7 +143,8 @@ func startSignedWith(t *testing.T, ready func() bool) (*app, string, *pcFake) {
 	o := options{dir: dir, card: card, statusFile: filepath.Join(socks, "state"), places: filepath.Join(socks, "places"),
 		play: filepath.Join(socks, "play"), browse: filepath.Join(socks, "b.sock"), control: filepath.Join(socks, "c.sock"),
 		star: filepath.Join(socks, "star"), starred: filepath.Join(socks, "starred"), done: filepath.Join(socks, "ringnav-done"),
-		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: ready}
+		port: 18200, resume: filepath.Join(card, "ringnav-resume"), sleep: filepath.Join(socks, "sleep"), ready: ready,
+		recut: filepath.Join(socks, "recut")}
 	a, err := start(o)
 	if err != nil {
 		t.Fatal(err)
@@ -753,5 +754,27 @@ func TestRemoveAdsAgain(t *testing.T) {
 	after, err := os.Stat(e1.Path)
 	if e, _ := a.lib.PCEpisode(podA, epA1); err != nil || !e.OnCard || os.SameFile(before, after) {
 		t.Errorf("not in its place anew: %v, on card %v, same file %v", err, e.OnCard, err == nil && os.SameFile(before, after))
+	}
+}
+
+// An episode replaced by a copy cut again (Remove Ads Again): its place in Q2 Pod's ring moves to
+// the same moment of the new copy, and a Q2 Pod with "recut" is told which seconds of the old copy
+// went, to go on from there if it plays it (the user's, 2026-11-16: the old copy played on).
+func TestReplacedMovesThePlace(t *testing.T) {
+	a, card, _ := startSigned(t)
+	path := filepath.Join(card, "Podcasts", "Show", "ep.mp3")
+	ring(t, card, path, 1500)
+	cuts := [][2]float64{{100, 160}, {1055, 1241.4}, {4000, 4100}}
+	a.replaced(path, cuts)
+	if b, _ := os.ReadFile(a.opts.places); string(b) != fmt.Sprintf("%d\t%s\n", 1253, path) { // 1500 less 60 and 186.4
+		t.Errorf("places %q", b)
+	}
+	if _, err := os.Stat(a.opts.recut); err == nil {
+		t.Error("told a Q2 Pod without recut")
+	}
+	os.WriteFile(q2.CapsFile, []byte("playlist progress pages library sleep places recut\n"), 0o644)
+	a.replaced(path, cuts)
+	if b, _ := os.ReadFile(a.opts.recut); string(b) != path+"\n100\t160\n1055\t1241\n4000\t4100\n" {
+		t.Errorf("recut %q", b)
 	}
 }

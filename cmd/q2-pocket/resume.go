@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -96,4 +97,35 @@ func (a *app) setPlaces(m map[string]int) bool {
 		fmt.Fprintf(&b, "%d\t%s\n", n, p)
 	}
 	return q2.WriteFile(a.opts.places, []byte(b.String())) == nil
+}
+
+// replaced is an episode on the card replaced by a copy cut again (Remove Ads Again), cuts the
+// seconds of the old copy the new one leaves out (clean.Recut): the place Q2 Pod keeps in it moves
+// to the same moment of the new copy, and while it plays Q2 Pod goes on there from the new copy
+// (the .recut note, caps "recut"; the user's, 2026-11-16: the old copy played on, sponsor reads and
+// all, though the new one was in place).
+func (a *app) replaced(path string, cuts [][2]float64) {
+	if len(cuts) == 0 {
+		return
+	}
+	if sec, ok := a.places()[placeKey(path)]; ok {
+		to := float64(sec)
+		for _, c := range cuts {
+			switch t := float64(sec); {
+			case t >= c[1]:
+				to -= c[1] - c[0]
+			case t > c[0]:
+				to -= t - c[0]
+			}
+		}
+		a.setPlaces(map[string]int{path: int(math.Max(to, 1))})
+	}
+	if q2.HasCap("recut") {
+		var b strings.Builder
+		b.WriteString(path + "\n")
+		for _, c := range cuts {
+			fmt.Fprintf(&b, "%d\t%d\n", int(math.Round(c[0])), int(math.Round(c[1])))
+		}
+		q2.WriteFile(a.opts.recut, []byte(b.String()))
+	}
 }

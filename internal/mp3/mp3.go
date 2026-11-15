@@ -331,6 +331,43 @@ func infoFrame(x header, b []byte) bool {
 	return len(b) >= 40 && string(b[36:40]) == "VBRI"
 }
 
+// FramesIn is about how many frames the MP3 at path holds (frameCount), read from its first frame
+// alone, the tags passed over; 0 when none is found near the start.
+func FramesIn(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	var off int64
+	b := make([]byte, 16<<10)
+	for { // ID3v2 tags, one after another
+		if n, _ := f.ReadAt(b[:10], off); n < 10 || string(b[:3]) != "ID3" {
+			break
+		}
+		off += int64(b[6]&0x7f)<<21 | int64(b[7]&0x7f)<<14 | int64(b[8]&0x7f)<<7 | int64(b[9]&0x7f) + 10
+		if b[3] == 4 && b[5]&0x10 != 0 { // a footer
+			off += 10
+		}
+	}
+	n, _ := f.ReadAt(b, off)
+	b = b[:n]
+	for i := 0; i+4 <= len(b); i++ {
+		x, ok := parse(be32(b[i:]))
+		if !ok || i+x.length+4 > len(b) {
+			continue
+		}
+		if y, ok := parse(be32(b[i+x.length:])); ok && x.same(y) { // its next frame where it says: a frame
+			return frameCount(x, b[i:], fi.Size()-off-int64(i))
+		}
+	}
+	return 0
+}
+
 // ScanFile is Scan of the file at path.
 func ScanFile(path string) (*Stream, error) {
 	f, err := os.Open(path)

@@ -41,7 +41,7 @@ func info() Info {
 
 func TestUntagged(t *testing.T) {
 	h, err := ReadHead(bufio.NewReader(bytes.NewReader(audio)))
-	if err != nil || !h.Needs(false) || h.Len != 0 {
+	if err != nil || !h.Needs(Info{}, false) || h.Len != 0 {
 		t.Fatal(err, h)
 	}
 	out := h.Build(info(), []byte{0xff, 0xd8, 0xff, 0xd9})
@@ -67,15 +67,20 @@ func TestMerged(t *testing.T) {
 	putSyncsafe(tag[6:10], len(body))
 	file := append(append(tag, body...), audio...)
 	h, err := ReadHead(bufio.NewReader(bytes.NewReader(file)))
-	if err != nil || h.Len != int64(len(tag)+len(body)) || !h.Needs(false) {
+	if err != nil || h.Len != int64(len(tag)+len(body)) || !h.Needs(Info{}, false) {
 		t.Fatal(err)
 	}
 	i := info()
 	i.Author = "Zoë ☕"
 	f, ver, _ := frames(t, h.Build(i, nil))
-	if ver != 3 || string(f["TIT2"]) != "\x00Their Title" || f["CHAP"] == nil || string(f["TYER"]) != "\x002024" ||
-		string(f["TALB"]) != "\x00The Show" || f["TDRC"] != nil || f["APIC"] != nil {
+	// the episode's title in place of theirs (the user's, 2026-11-16: an Acast episode's tag named it
+	// "THEME SONG"); with none to give, theirs stays
+	if ver != 3 || string(f["TIT2"]) != "\x00Episode 1: Hello" || f["CHAP"] == nil || string(f["TYER"]) != "\x002024" ||
+		string(f["TALB"]) != "\x00The Show" || f["TDRC"] != nil || f["APIC"] != nil || !h.Needs(i, false) {
 		t.Fatalf("%q", f)
+	}
+	if f, _, _ := frames(t, h.Build(Info{Show: "The Show"}, nil)); string(f["TIT2"]) != "\x00Their Title" {
+		t.Fatalf("%q", f["TIT2"])
 	}
 	if p := f["TPE1"]; p[0] != 1 || !bytes.Equal(p[1:3], []byte{0xff, 0xfe}) || len(p) != 3+2*5 { // UTF-16
 		t.Fatalf("%q", p)
@@ -123,7 +128,7 @@ func TestWrite(t *testing.T) {
 	if !bytes.Equal(got[n:], audio) {
 		t.Fatal("audio changed")
 	}
-	if h, err := Read(dst); err != nil || h.Needs(false) {
+	if h, err := Read(dst); err != nil || h.Needs(info(), false) {
 		t.Fatal(err)
 	}
 }
@@ -231,7 +236,7 @@ func TestMalformed(t *testing.T) {
 		"frame 2^32-1":           tagged(0, frame(0xffffffff)),
 	} {
 		h, err := ReadHead(bufio.NewReader(bytes.NewReader(file)))
-		if err != nil || len(h.after) != 1 || len(h.frames) != 0 || !h.Needs(false) {
+		if err != nil || len(h.after) != 1 || len(h.frames) != 0 || !h.Needs(Info{}, false) {
 			t.Errorf("%s: %v %+v", name, err, h)
 		}
 	}
@@ -297,5 +302,66 @@ func TestProgressive(t *testing.T) {
 	odd := append([]byte{0xff, 0xd8, 0xff, 0xe1, 0, 6, 0xff, 0xc0, 0, 0, 0x12, 0x34, 0xff}, big[2:]...)
 	if _, err := jpeg.DecodeConfig(bytes.NewReader(odd)); err != nil || !progressive(odd) {
 		t.Fatal("frame not found:", err)
+	}
+}
+
+// A picture Q2 Pod's lists can't show (a PNG: the user's, 2026-11-16, Very Bad Wizards' rows had no
+// art) counts as none: a cover given takes its place, the rest kept; a JPEG stays. Picture reads past
+// a UTF-16 description.
+func TestOddCover(t *testing.T) {
+	frame := func(id string, body []byte) []byte {
+		f := append([]byte(id), 0, 0, 0, 0, 0, 0)
+		binary.BigEndian.PutUint32(f[4:8], uint32(len(body)))
+		return append(f, body...)
+	}
+	var p bytes.Buffer
+	png.Encode(&p, image.NewRGBA(image.Rect(0, 0, 8, 8)))
+	tagged := func(apic []byte) *Head {
+		body := append(frame("TIT2", []byte("\x00Episode 1: Hello")), frame("TPE1", []byte("\x00Ann"))...)
+		body = append(append(body, frame("TALB", []byte("\x00The Show"))...), frame("APIC", apic)...)
+		tag := []byte{'I', 'D', '3', 3, 0, 0, 0, 0, 0, 0}
+		putSyncsafe(tag[6:10], len(body))
+		h, err := ReadHead(bufio.NewReader(bytes.NewReader(append(append(tag, body...), audio...))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	h := tagged(append([]byte("\x01image/png\x00\x03\xff\xfeA\x00\x00\x00"), p.Bytes()...))
+	if !h.OddCover() || !bytes.Equal(h.Picture(), p.Bytes()) || h.Needs(info(), false) || !h.Needs(info(), true) {
+		t.Fatal("a PNG taken for a cover the lists show")
+	}
+	cover := []byte{0xff, 0xd8, 0xff, 0xd9}
+	f, _, _ := frames(t, h.Build(info(), cover))
+	if !bytes.HasSuffix(f["APIC"], cover) || !bytes.HasPrefix(f["APIC"], []byte("\x00image/jpeg")) || string(f["TPE1"]) != "\x00Ann" {
+		t.Fatalf("%q", f["APIC"])
+	}
+	if h := tagged(append([]byte("\x00image/jpeg\x00\x03\x00"), cover...)); h.OddCover() || h.Needs(info(), true) {
+		t.Fatal("a JPEG replaced")
+	}
+}
+
+// BuildIn's start takes the old tags' room exactly, so it is written over them in place; nil when it
+// won't fit.
+func TestBuildIn(t *testing.T) {
+	body := append([]byte("TIT2\x00\x00\x00\x0b\x00\x00\x00THEME SONG"), make([]byte, 200)...)
+	tag := []byte{'I', 'D', '3', 3, 0, 0, 0, 0, 0, 0}
+	putSyncsafe(tag[6:10], len(body))
+	file := append(append(tag, body...), audio...)
+	h, err := ReadHead(bufio.NewReader(bytes.NewReader(file)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := Info{Title: "Terry Pratchett's Guards! Guards!", Show: "Book Cheat"}
+	head := h.BuildIn(i, nil, h.Len)
+	if int64(len(head)) != h.Len {
+		t.Fatalf("%d bytes for %d", len(head), h.Len)
+	}
+	g, err := ReadHead(bufio.NewReader(bytes.NewReader(append(head, audio...))))
+	if err != nil || g.Len != h.Len || g.title() != i.Title || g.Needs(i, false) {
+		t.Fatal(err, g)
+	}
+	if h.BuildIn(i, make([]byte, 300), h.Len) != nil || h.BuildIn(i, nil, 0) != nil {
+		t.Fatal("built past its room")
 	}
 }

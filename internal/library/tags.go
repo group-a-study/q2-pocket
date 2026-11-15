@@ -72,27 +72,48 @@ func tmpOf(path string) string {
 // too big to keep), tag.ErrNotMP3 when it isn't one. A panic reading a file (a tag broken some way
 // not foreseen) is an error, not the app's end: Retag would meet the file again at each start.
 func (l *Library) tagTo(ctx context.Context, src, dst string, e EpisodeInfo) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			os.Remove(dst)
-			err = fmt.Errorf("can't read its tag: %v", p)
-		}
-	}()
-	h, err := tag.Read(src)
+	_, info, cover, err := l.retag(ctx, src, e)
 	if err != nil {
 		return err
 	}
-	if h.Big() || !h.Needs(false) && h.HasCover() {
-		return errTagged
+	return tag.Write(src, dst, info, cover)
+}
+
+// retag is the head of the MP3 at path, what it is to be tagged with, and the cover it is to have
+// (nil to keep its own): errTagged when it has all it needs already (or a tag too big to keep).
+func (l *Library) retag(ctx context.Context, path string, e EpisodeInfo) (h *tag.Head, info tag.Info, cover []byte, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			h, err = nil, fmt.Errorf("can't read its tag: %v", p)
+		}
+	}()
+	if h, err = tag.Read(path); err != nil {
+		return nil, info, nil, err
 	}
-	var cover []byte
-	if !h.HasCover() {
-		cover = l.cover(ctx, e.Image)
+	info = tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}
+	if h.Big() || !h.Needs(info, false) && h.HasCover() && !h.OddCover() {
+		return nil, info, nil, errTagged
 	}
-	if !h.Needs(cover != nil) {
-		return errTagged
+	cover = l.coverFor(ctx, h, e)
+	if !h.Needs(info, cover != nil) {
+		return nil, info, nil, errTagged
 	}
-	return tag.Write(src, dst, tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}, cover)
+	return h, info, cover, nil
+}
+
+// coverFor is the cover a tag is to have, nil to keep its own: for none, the feed's; for one Q2
+// Pod's lists can't show (a PNG: the user's, 2026-11-16, Very Bad Wizards' rows had no art), its
+// own as a JPEG, else the feed's.
+func (l *Library) coverFor(ctx context.Context, h *tag.Head, e EpisodeInfo) []byte {
+	if h.HasCover() && !h.OddCover() {
+		return nil
+	}
+	if h.OddCover() {
+		if b := tag.Shrink(h.Picture()); b != nil {
+			return b
+		}
+	}
+	return l.cover(ctx, e.Image)
 }
 
 // errUncut: nothing to cut from a download (or no cleaner); it is only tagged.
@@ -129,11 +150,7 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 		h.Retime(func(ms uint32) uint32 { return uint32(ed.Report.Kept(float64(ms)/1000) * 1000) })
 		_, _, cut := ed.Report.Removed()
 		h.AddChapters(ed.Chapters, uint32((ed.Report.Length-cut)*1000)) // the publisher's, when it has none
-		var cover []byte
-		if !h.HasCover() {
-			cover = l.cover(ctx, e.Image)
-		}
-		head = h.Build(tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}, cover)
+		head = h.Build(tag.Info{Title: e.Title, Show: e.Show, Author: e.Author, Date: e.Date}, l.coverFor(ctx, h, e))
 	} else if f, err := os.Open(part); err == nil { // its own tag, as it was (only its bytes read)
 		head = make([]byte, ed.Stream.TagLen)
 		_, err = io.ReadFull(f, head)
@@ -223,7 +240,9 @@ func (l *Library) place(ctx context.Context, part string, e EpisodeInfo, note fu
 }
 
 // Retag tags the MP3 episodes on the card that lack a title, an artist, an album or (when the feed
-// has one) a cover, one at a time until ctx ends; how many it tagged.
+// has one) a cover Q2 Pod's lists can show, or whose title isn't the episode's, one at a time until
+// ctx ends; how many it tagged. A new tag that fits in the old one's room is written over it in
+// place; else the file is copied with it.
 func (l *Library) Retag(ctx context.Context) int {
 	l.retagging.Store(true)
 	defer l.retagging.Store(false)
@@ -236,15 +255,27 @@ func (l *Library) Retag(ctx context.Context) int {
 		if !isMP3(e.Path) {
 			continue
 		}
+		h, info, cover, err := l.retag(ctx, e.Path, e)
+		if err != nil {
+			continue
+		}
+		if head := h.BuildIn(info, cover, h.Len); head != nil {
+			if l.overwrite(e.Path, head) == nil {
+				l.changed()
+				n++
+			}
+			continue
+		}
 		if free, ok := freeBytes(filepath.Dir(e.Path)); ok && free < e.Size+reserve { // no room for its copy
 			continue
 		}
 		tmp := tmpOf(e.Path)
-		if err := l.tagTo(ctx, e.Path, tmp, e); err != nil {
+		if err := tag.Write(e.Path, tmp, info, cover); err != nil {
+			os.Remove(tmp)
 			continue
 		}
 		l.fileMu.Lock()
-		_, err := os.Stat(e.Path) // deleted meanwhile: not brought back
+		_, err = os.Stat(e.Path) // deleted meanwhile: not brought back
 		if err == nil {
 			err = os.Rename(tmp, e.Path)
 		}
@@ -256,9 +287,34 @@ func (l *Library) Retag(ctx context.Context) int {
 		if !e.Date.IsZero() {
 			os.Chtimes(e.Path, e.Date, e.Date)
 		}
+		l.changed()
 		n++
 	}
 	return n
+}
+
+// overwrite writes head over the start of the file at path, which it fits exactly (BuildIn), its
+// times kept; a file deleted meanwhile is left gone.
+func (l *Library) overwrite(path string, head []byte) error {
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteAt(head, 0)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	os.Chtimes(path, st.ModTime(), st.ModTime())
+	return err
 }
 
 // Retagging is whether Retag is at work.
