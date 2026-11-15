@@ -37,7 +37,8 @@ button.icon { padding: 6px 10px; background: transparent; color: var(--muted); b
 button:disabled { opacity: 0.5; cursor: default; }
 #upnextAll { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 #upnextAll:empty { display: none; }
-select.count { flex: 0 0 auto; width: auto; padding: 8px 12px; border-radius: 999px; }
+#upnextAll .group { display: inline-flex; gap: 6px; align-items: center; }
+select.count { flex: 0 0 auto; width: auto; padding: 8px 10px; border-radius: 999px; }
 .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
 .tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -415,7 +416,9 @@ function renderUpNext(d) {
       toast((await api("pc/downloadnext", {count: Number(pick.value)})).message);
       refresh();
     });
-    all.append(next, pick);
+    const group = el("span", "group"); // the count beside its button, wrapping with it
+    group.append(next, pick);
+    all.append(group);
   }
   if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Up Next is empty."));
   for (const e of d.episodes.slice(0, 200)) list.append(pcRow(e));

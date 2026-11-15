@@ -402,6 +402,17 @@ func TestPhoneAccount(t *testing.T) {
 	if s["ads"] != false || s["upNext"] != 3.0 || s["youtube"] != true || s["youTubeKey"] != nil {
 		t.Errorf("settings %v", s)
 	}
+	// Download Next from the phone: its count kept as the Q2's (the sync it asks for runs at once), then stopped with 0
+	if code, out := call("POST", "pc/downloadnext", `{"count":3}`); code != 200 || out["message"] != "Downloading the next 3 episodes" ||
+		a.settings().nextCount() != 3 {
+		t.Errorf("downloadnext: %d %v (%d)", code, out, a.sy.nextPending())
+	}
+	if _, up := call("GET", "pc/upnext", ""); up["nextCount"] != 3.0 {
+		t.Errorf("upnext's next count: %v", up["nextCount"])
+	}
+	if code, _ := call("POST", "pc/downloadnext", `{"count":0}`); code != 200 || a.sy.nextPending() != 0 {
+		t.Errorf("downloadnext stop: %d", code)
+	}
 	if a.settings().YouTubeKey != "K1" {
 		t.Errorf("key %q", a.settings().YouTubeKey)
 	}
