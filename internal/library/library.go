@@ -409,7 +409,8 @@ func (l *Library) mark(eps []EpisodeInfo) []EpisodeInfo {
 		}
 		if f, ok := on[strings.ToLower(filepath.Base(eps[i].Path))]; ok {
 			eps[i].OnCard, eps[i].Size = true, sizeOf(f)
-		} else if l.DL != nil { // nil while the queue itself is read back
+		}
+		if l.DL != nil { // nil while the queue itself is read back; on the card, a Remove Ads Again's
 			eps[i].Job = l.DL.Job(eps[i].Key, eps[i].EID)
 		}
 	}

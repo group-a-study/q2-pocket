@@ -10,9 +10,10 @@ import (
 	"q2-pocket/internal/q2"
 )
 
-// settings is .pocket/config.json. Missing choices take their defaults: every ad removal on
-// (adverts, sponsor reads, self-promotion, copies compared: the user's, 2026-11-15), Up Next's first
-// upNextFirst episodes downloaded, played episodes kept, the sync one-way.
+// settings is .pocket/config.json. Missing choices take their defaults: Up Next's first upNextFirst
+// episodes downloaded, played episodes kept, the sync one-way. Every ad removal (adverts, sponsor
+// reads, self-promotion, copies compared) is always on (the user's, 2026-11-15: on by default;
+// 2026-11-16: they had come unticked, so always on, ticked, and no switch turns them off).
 type settings struct {
 	Key         string `json:"web_key"`      // the QR code's: signs a browser in
 	PIN         string `json:"pin"`          // the Q2's screen's, typed with the address
@@ -84,8 +85,10 @@ func loadSettings(dir string) settings {
 		if s.Version < 2 && s.UpNext < 0 {
 			s.UpNext = upNextFirst
 		}
-		s.Ads, s.Sponsors, s.SelfPromo, s.Copy = true, true, true, true
 		s.Version, dirty = settingsVersion, true
+	}
+	if !s.Ads || !s.Sponsors || !s.SelfPromo || !s.Copy {
+		s.Ads, s.Sponsors, s.SelfPromo, s.Copy, dirty = true, true, true, true, true
 	}
 	if dirty {
 		saveSettings(dir, s)
@@ -113,10 +116,10 @@ func (a *app) change(fn func(*settings)) error {
 	return saveSettings(a.opts.dir, s)
 }
 
-// cleanSettings is the settings as the cleaner takes them.
+// cleanSettings is the settings as the cleaner takes them: every removal on, always.
 func (a *app) cleanSettings() clean.Settings {
 	s := a.settings()
-	return clean.Settings{Ads: s.Ads, Sponsors: s.Sponsors, SelfPromo: s.SelfPromo, Copy: s.Copy,
+	return clean.Settings{Ads: true, Sponsors: true, SelfPromo: true, Copy: true,
 		YouTubeKey: s.YouTubeKey, SpotifyID: s.SpotifyID, SpotifySecret: s.SpotifySecret}
 }
 

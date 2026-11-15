@@ -558,10 +558,10 @@ func (a *app) adfreePage() q2spot.Reply {
 		upn = fmt.Sprintf("The First %d", s.UpNext)
 	}
 	rows := []q2spot.Row{
-		act("set", "ads", "Remove Ads: "+onOff(s.Ads), "The ads a podcast's host puts in as it serves it"),
-		act("set", "sponsors", "Remove Sponsor Reads: "+onOff(s.Sponsors), "From SponsorBlock, transcripts and chapters"),
-		act("set", "selfpromo", "Also Remove Self-Promotion: "+onOff(s.SelfPromo), "A show's plugs for itself, where SponsorBlock has them"),
-		act("set", "copy", "Compare with a Second Copy: "+onOff(s.Copy), "Downloads one when the host would send other ads"),
+		info("Remove Ads: Always On", "The ads a podcast's host puts in as it serves it"),
+		info("Remove Sponsor Reads: Always On", "From SponsorBlock, transcripts, chapters and show notes"),
+		info("Remove Self-Promotion: Always On", "A show's plugs for itself, where SponsorBlock has them"),
+		info("Compare with a Second Copy: Always On", "Downloads one when the host would send other ads"),
 		info("SponsorBlock", sb),
 		info("So Far", join(plural(ads, "ad")+" and "+plural(sp, "sponsor read")+" cut", length(int(sec)), "from "+plural(eps, "episode"))),
 		info("Ads Learned", fmt.Sprintf("%d, recognised wherever they play again", known)),
@@ -631,18 +631,8 @@ func (a *app) setOption(name string) q2spot.Reply {
 	msg := ""
 	err := a.change(func(s *settings) {
 		switch name {
-		case "ads":
-			s.Ads = !s.Ads
-			msg = "Ads: " + onOff(s.Ads)
-		case "sponsors":
-			s.Sponsors = !s.Sponsors
-			msg = "Sponsor reads: " + onOff(s.Sponsors)
-		case "selfpromo":
-			s.SelfPromo = !s.SelfPromo
-			msg = "Self-promotion: " + onOff(s.SelfPromo)
-		case "copy":
-			s.Copy = !s.Copy
-			msg = "Second copy: " + onOff(s.Copy)
+		case "ads", "sponsors", "selfpromo", "copy": // always on (an older page's row)
+			msg = "Ad removal is always on"
 		case "nextn":
 			cur, next := s.nextCount(), nextChoices[0]
 			for i, c := range nextChoices {

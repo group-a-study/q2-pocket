@@ -72,9 +72,16 @@ func tmpOf(path string) string {
 // too big to keep), tag.ErrNotMP3 when it isn't one. A panic reading a file (a tag broken some way
 // not foreseen) is an error, not the app's end: Retag would meet the file again at each start.
 func (l *Library) tagTo(ctx context.Context, src, dst string, e EpisodeInfo) (err error) {
-	_, info, cover, err := l.retag(ctx, src, e)
+	h, info, cover, err := l.retag(ctx, src, e)
 	if err != nil {
 		return err
+	}
+	if st, err := os.Stat(src); err == nil && !roomFor(dst, st.Size()) { // no room for a copy: tagged where it is
+		os.Remove(src + ".json")
+		if err := shiftInPlace(src, h.Build(info, cover), h.Len); err != nil {
+			return fmt.Errorf("%w: %v", errPartBroken, err)
+		}
+		return errInPlace
 	}
 	return tag.Write(src, dst, info, cover)
 }
@@ -159,6 +166,15 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 			return err
 		}
 	}
+	if st, err := os.Stat(part); err == nil && !roomFor(dst, st.Size()) {
+		// no room for a cut copy beside it (the user's, 2026-11-16: on a full card an episode went in
+		// as it came, its ads and its own tag's title in): cut where it is
+		note("Cutting the ads out")
+		if err := cutInPlace(part, head, ed); err != nil {
+			return fmt.Errorf("%w: %v", errPartBroken, err)
+		}
+		return errInPlace
+	}
 	in, err := os.Open(part)
 	if err != nil {
 		return err
@@ -174,9 +190,97 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 	}
 	if err != nil {
 		os.Remove(dst)
-		return errUncut // no room for the cut copy, say: it goes in as it came
+		l.o.Clean.Uncut(cleanEpisode(e), "Couldn't write the cut episode: left as it came")
+		return errUncut
 	}
 	return nil
+}
+
+// errInPlace: the download was cut or tagged where it is, its part itself, for want of room on the
+// card for a copy: the part goes into its place as it is now.
+var errInPlace = errors.New("done in place")
+
+// errPartBroken: cutting or tagging a part where it is failed part way, so the part is neither the
+// download nor the episode: it is fetched again.
+var errPartBroken = errors.New("the download broke as it was cut")
+
+// roomFor is whether the card holding path has room for size more bytes, its reserve kept.
+func roomFor(path string, size int64) bool {
+	free, ok := freeBytes(filepath.Dir(path))
+	return !ok || free >= size+reserve
+}
+
+// cutInPlace cuts ed's frames out of part where it is and gives it head for its tag: first the
+// audio, under its own tag as it is (so nothing written passes what is still to be read), then the
+// whole moved to fit head (shiftInPlace). Its .json goes first: a part broken part way by an ending
+// app is never taken for a whole download, but fetched again.
+func cutInPlace(part string, head []byte, ed *clean.Edit) error {
+	os.Remove(part + ".json")
+	f, err := os.OpenFile(part, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	own := make([]byte, ed.Stream.TagLen)
+	if _, err = f.ReadAt(own, 0); err == nil {
+		_, err = ed.Stream.Write(f, f, own, ed.Cuts)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return shiftInPlace(part, head, int64(len(own)))
+}
+
+// shiftInPlace makes the file at path head followed by what it holds from from on, where it is: the
+// rest moved toward its end from the last byte back (head longer than from), or toward its start
+// from the first on, the file cut short after (shorter); a megabyte held at a time, its times kept.
+func shiftInPlace(path string, head []byte, from int64) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return err
+	}
+	size, d := st.Size(), int64(len(head))-from
+	buf := make([]byte, 1<<20)
+	move := func(at int64, n int) error {
+		if _, err := f.ReadAt(buf[:n], at); err != nil {
+			return err
+		}
+		_, err := f.WriteAt(buf[:n], at+d)
+		return err
+	}
+	switch {
+	case d > 0:
+		for end := size; end > from && err == nil; {
+			start := max(from, end-int64(len(buf)))
+			err = move(start, int(end-start))
+			end = start
+		}
+	case d < 0:
+		for at := from; at < size && err == nil; at += int64(len(buf)) {
+			err = move(at, int(min(int64(len(buf)), size-at)))
+		}
+		if err == nil {
+			err = f.Truncate(size + d)
+		}
+	}
+	if err == nil {
+		_, err = f.WriteAt(head, 0)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	os.Chtimes(path, st.ModTime(), st.ModTime())
+	return err
 }
 
 // Transcript writes the transcript beside an episode already on the card, if it has one and has
@@ -212,11 +316,15 @@ func (l *Library) place(ctx context.Context, part string, e EpisodeInfo, note fu
 		switch {
 		case err == nil:
 			src = tmp
+		case errors.Is(err, errInPlace): // the part itself, cut or tagged
 		case errors.Is(err, tag.ErrNotMP3), errors.Is(err, errTagged), errors.Is(err, errUncut):
+		case errors.Is(err, errPartBroken):
+			removePart(part)
+			return err
 		case ctx.Err() != nil:
 			os.Remove(tmp)
 			return ctx.Err()
-		default: // no room for the tagged copy, say: it goes in untagged, for Retag
+		default: // the tagged copy failed some other way: it goes in untagged, for Retag
 			os.Remove(tmp)
 		}
 	}
@@ -266,7 +374,17 @@ func (l *Library) Retag(ctx context.Context) int {
 			}
 			continue
 		}
-		if free, ok := freeBytes(filepath.Dir(e.Path)); ok && free < e.Size+reserve { // no room for its copy
+		if !roomFor(e.Path, e.Size) { // no room for a copy: moved where it is
+			l.fileMu.Lock()
+			_, err := os.Stat(e.Path) // deleted meanwhile: left gone
+			if err == nil {
+				err = shiftInPlace(e.Path, h.Build(info, cover), h.Len)
+			}
+			l.fileMu.Unlock()
+			if err == nil {
+				l.changed()
+				n++
+			}
 			continue
 		}
 		tmp := tmpOf(e.Path)

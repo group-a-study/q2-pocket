@@ -34,9 +34,9 @@ func TestUpNextDefault(t *testing.T) {
 	}
 }
 
-// Every ad removal is on by default (the user's, 2026-11-15), self-promotion's too, and a config saved
-// before version 3 turns them all on once; one turned off since stays off. The sync is one-way unless
-// chosen.
+// Every ad removal is on (the user's, 2026-11-15), self-promotion's too, and always: a config that
+// has any off turns it on again as it loads (2026-11-16: they had come unticked). The sync is one-way
+// unless chosen.
 func TestAdRemovalOnByDefault(t *testing.T) {
 	if s := loadSettings(t.TempDir()); !s.Ads || !s.Sponsors || !s.SelfPromo || !s.Copy || s.TwoWay {
 		t.Fatalf("new config: %+v", s)
@@ -48,9 +48,13 @@ func TestAdRemovalOnByDefault(t *testing.T) {
 	if !s.Ads || !s.Sponsors || !s.SelfPromo || !s.Copy || s.UpNext != -1 || s.Version != settingsVersion {
 		t.Fatalf("version 2 config: %+v", s)
 	}
-	s.SelfPromo = false
+	s.SelfPromo, s.Copy = false, false
 	saveSettings(dir, s)
-	if s := loadSettings(dir); s.SelfPromo {
-		t.Fatal("turned off since, but on again")
+	if s := loadSettings(dir); !s.SelfPromo || !s.Copy {
+		t.Fatal("off again")
+	}
+	var saved settings
+	if b, _ := os.ReadFile(filepath.Join(dir, "config.json")); json.Unmarshal(b, &saved) != nil || !saved.SelfPromo || !saved.Copy {
+		t.Errorf("not saved on: %s", b)
 	}
 }

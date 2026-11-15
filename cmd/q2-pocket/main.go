@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.9"
+const version = "q2-v1.10"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts

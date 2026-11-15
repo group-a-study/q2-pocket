@@ -120,10 +120,11 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
       <div class="card" id="accountCard"></div>
       <h2>Ads &amp; Sponsors</h2>
       <div class="card">
-        <label class="switch"><input type="checkbox" id="setAds"><span class="grow"><b>Remove ads</b><br><span class="sub">The ads a podcast's host stitches in as it serves an episode: found in the MP3's own frames, by comparing copies and episodes, and learned as they come back.</span></span></label>
-        <label class="switch"><input type="checkbox" id="setSponsors"><span class="grow"><b>Remove sponsor reads</b><br><span class="sub">Read into the episode itself: from SponsorBlock (the episode's YouTube video or Spotify episode), its transcript and its chapters.</span></span></label>
-        <label class="switch"><input type="checkbox" id="setSelfPromo"><span class="grow"><b>Also self-promotion</b><br><span class="sub">A show's plugs for itself, where SponsorBlock marks them.</span></span></label>
-        <label class="switch"><input type="checkbox" id="setCopy"><span class="grow"><b>Compare with a second copy</b><br><span class="sub">When the host would send other ads (its size says), downloads it too: what the copies share is the episode.</span></span></label>
+        <div class="sub">Always on: every episode is checked for all of these as it downloads.</div>
+        <label class="switch"><input type="checkbox" id="setAds" checked disabled><span class="grow"><b>Remove ads</b><br><span class="sub">The ads a podcast's host stitches in as it serves an episode: found in the MP3's own frames, by comparing copies and episodes, and learned as they come back.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setSponsors" checked disabled><span class="grow"><b>Remove sponsor reads</b><br><span class="sub">Read into the episode itself: from SponsorBlock (the episode's YouTube video or Spotify episode), its transcript and its chapters.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setSelfPromo" checked disabled><span class="grow"><b>Also self-promotion</b><br><span class="sub">A show's plugs for itself, where SponsorBlock marks them.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setCopy" checked disabled><span class="grow"><b>Compare with a second copy</b><br><span class="sub">When the host would send other ads (its size says), downloads it too: what the copies share is the episode.</span></span></label>
       </div>
       <p class="muted" id="cutStats"></p>
       <h2>Downloads</h2>
@@ -309,6 +310,7 @@ function pcLine(e) {
   let when = join(e.show, day(e.published), length(e.duration));
   if (e.status === 2 && e.playedUpTo > 0 && e.duration > e.playedUpTo) when = join(e.show, length(e.duration - e.playedUpTo) + " left");
   if (e.status === 3) when = join(when, "Played");
+  if (e.onCard && e.job) return join(when, "On the Q2", e.job.note || jobLine(e.job)); // Remove Ads Again under way
   if (e.onCard) return join(when, "On the Q2");
   if (e.job) return join(when, jobLine(e.job));
   return when;
@@ -487,10 +489,6 @@ async function renderDiscover() {
 
 async function renderSettings() {
   const s = await api("pc/settings");
-  $("setAds").checked = s.ads;
-  $("setSponsors").checked = s.sponsors;
-  $("setSelfPromo").checked = s.selfPromo;
-  $("setCopy").checked = s.copy;
   $("setDeletePlayed").checked = s.deletePlayed;
   $("setTwoWay").checked = s.twoWay;
   $("setUpNext").value = String(s.upNext);
@@ -541,10 +539,6 @@ const setting = (id, key, value) => {
     try { await api("pc/settings", body); toast("Saved"); } catch (err) { toast(err.message); }
   };
 };
-setting("setAds", "ads", t => t.checked);
-setting("setSponsors", "sponsors", t => t.checked);
-setting("setSelfPromo", "selfPromo", t => t.checked);
-setting("setCopy", "copy", t => t.checked);
 setting("setDeletePlayed", "deletePlayed", t => t.checked);
 setting("setTwoWay", "twoWay", t => t.checked);
 setting("setUpNext", "upNext", t => parseInt(t.value, 10));
@@ -598,6 +592,10 @@ function renderShow(d) {
     let sub, btn, pct;
     if (e.onCard) {
       sub = join(when, "on the Q2", size(e.size));
+      if (e.job) { // Remove Ads Again under way
+        sub = join(when, "on the Q2", e.job.note || jobLine(e.job));
+        if (e.job.state === "active" && e.job.size > 0) pct = e.job.done * 100 / e.job.size;
+      }
       btn = button("Delete", "bad", async () => {
         if (!confirm("Delete “" + e.title + "” from the Q2?")) return;
         await api("delete", id); refresh();

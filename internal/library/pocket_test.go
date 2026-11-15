@@ -48,8 +48,27 @@ const (
 )
 
 // A Pocket Casts show: its episodes from the cache; one downloaded comes out without the advert a
-// second copy doesn't share.
+// second copy doesn't share. With no room on the card for a cut copy beside the download (the user's,
+// 2026-11-16: such an episode went in as it came, ads, title and all), it is cut and tagged where it
+// is, to the same bytes.
 func TestPocketShow(t *testing.T) {
+	roomy := pocketShow(t, true)
+	if tight := pocketShow(t, false); !bytes.Equal(tight, roomy) || len(tight) == 0 {
+		t.Errorf("cut where it is: %d bytes, %d with room for a copy", len(tight), len(roomy))
+	}
+}
+
+func pocketShow(t *testing.T, room bool) []byte {
+	if !room { // the card's folders have no room for a copy; the app's own folder has
+		was := freeBytes
+		freeBytes = func(p string) (int64, bool) {
+			if strings.Contains(p, "Podcasts") {
+				return reserve + 1000, true
+			}
+			return 1 << 40, true
+		}
+		t.Cleanup(func() { freeBytes = was })
+	}
 	first, other := withAd(t, "ad1.mp3"), withAd(t, "ad2.mp3")
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +157,11 @@ func TestPocketShow(t *testing.T) {
 	if eps, _ := l.Downloaded(); len(eps) != 1 {
 		t.Errorf("downloaded: %d", len(eps))
 	}
+	if left, _ := os.ReadDir(filepath.Join(app, "partial")); len(left) != 0 {
+		t.Errorf("partial left: %v", left)
+	}
+	b, _ := os.ReadFile(e.Path)
+	return b
 }
 
 // A show subscribed by its feed, then found in Pocket Casts: its episode on the card keeps its file.

@@ -521,6 +521,17 @@ func (c *Cleaner) save(e Episode, r *Report) {
 	}
 }
 
+// Uncut marks an episode's report as cut of nothing after all (its cut copy couldn't be written),
+// why its note: its rows don't claim cuts it hasn't had.
+func (c *Cleaner) Uncut(e Episode, why string) {
+	r := Load(c.Dir, e.Key, e.EID)
+	if r == nil {
+		r = &Report{Checked: time.Now()}
+	}
+	r.Cuts, r.Note = nil, why
+	c.save(e, r)
+}
+
 // Load is the report of what was cut from an episode; nil when it wasn't checked.
 func Load(dir, key, eid string) *Report {
 	b, err := os.ReadFile(filepath.Join(dir, "cuts", key+"-"+eid+".json"))

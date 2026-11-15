@@ -772,13 +772,13 @@ func TestCardFull(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Dir(eps[0].Path), 0o755)
 	os.WriteFile(eps[0].Path, mp3Audio("1"), 0o644)
-	free.Store(reserve)
-	if n := l.Retag(context.Background()); n != 0 {
-		t.Fatal("tagged without room", n)
+	free.Store(reserve) // no room for a copy: tagged where it is (TestRetagWithoutRoom)
+	if n := l.Retag(context.Background()); n != 1 {
+		t.Fatal("not tagged without room", n)
 	}
 	free.Store(1 << 40)
-	if n := l.Retag(context.Background()); n != 1 {
-		t.Fatal("not tagged with room", n)
+	if n := l.Retag(context.Background()); n != 0 {
+		t.Fatal("tagged again", n)
 	}
 }
 
@@ -872,5 +872,45 @@ func TestPanicFailsTheEpisode(t *testing.T) {
 	var p permanent
 	if !errors.As(err, &p) || !strings.Contains(err.Error(), "couldn't handle this episode") {
 		t.Fatal(err)
+	}
+}
+
+// shiftInPlace gives a file a new start, the rest moved to follow it where the file is, a megabyte at a
+// time either way: what a card with no room for a copy has to do.
+func TestShiftInPlace(t *testing.T) {
+	rest := make([]byte, 2<<20+12345)
+	for i := range rest {
+		rest[i] = byte(i * 7 % 251)
+	}
+	path := filepath.Join(t.TempDir(), "ep.mp3")
+	for _, head := range [][]byte{bytes.Repeat([]byte("H"), 300<<10), []byte("h"), bytes.Repeat([]byte("x"), 20)} {
+		os.WriteFile(path, append(bytes.Repeat([]byte("T"), 20), rest...), 0o644)
+		if err := shiftInPlace(path, head, 20); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(path); !bytes.Equal(got, append(append([]byte(nil), head...), rest...)) {
+			t.Fatalf("head of %d: %d bytes", len(head), len(got))
+		}
+	}
+}
+
+// With no room on the card for a tagged copy, Retag tags an episode where it is.
+func TestRetagWithoutRoom(t *testing.T) {
+	f, dir := newFake(t), t.TempDir()
+	f.mp3.Store(true)
+	l := open(t, dir)
+	si, _ := l.Subscribe(context.Background(), f.URL+"/feed.xml")
+	eps, _ := l.Episodes(si.Key)
+	was := freeBytes
+	freeBytes = func(string) (int64, bool) { return reserve, true }
+	t.Cleanup(func() { freeBytes = was })
+	os.MkdirAll(filepath.Dir(eps[1].Path), 0o755)
+	os.WriteFile(eps[1].Path, mp3Audio("1"), 0o644)
+	if n := l.Retag(context.Background()); n != 1 {
+		t.Fatal("retagged", n)
+	}
+	got, _ := os.ReadFile(eps[1].Path)
+	if h, err := tag.Read(eps[1].Path); err != nil || h.Needs(tag.Info{Title: eps[1].Title}, true) || !bytes.HasSuffix(got, mp3Audio("1")) {
+		t.Fatal("not tagged where it is", err)
 	}
 }

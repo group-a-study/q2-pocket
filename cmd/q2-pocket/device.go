@@ -160,6 +160,15 @@ func episodeRow(e library.EpisodeInfo, withShow bool, at int, dir string) q2spot
 		}
 		return q2spot.Row{Kind: "local", URI: e.Path, Context: "album", Title: e.Title,
 			Subtitle: join(show, day(e.Date), left, cut), Position: "del:" + id}
+	case e.OnCard && e.Job != nil && e.Job.State != library.Failed: // Remove Ads Again under way
+		again := "Removing its ads again"
+		if e.Job.State == library.Active && e.Job.Note == "" {
+			again = "Downloading again " + pct(e.Job.Done, e.Job.Size)
+		} else if e.Job.Note != "" {
+			again = e.Job.Note + "…"
+		}
+		return q2spot.Row{Kind: "local", URI: e.Path, Context: "album", Title: e.Title,
+			Subtitle: join(show, again), Position: "del:" + id}
 	case e.OnCard:
 		return q2spot.Row{Kind: "local", URI: e.Path, Context: "album", Title: e.Title,
 			Subtitle: join(when, cmpOr(cut, "Downloaded")), Position: "del:" + id}

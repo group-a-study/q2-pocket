@@ -350,20 +350,20 @@ func TestSync(t *testing.T) {
 	}
 }
 
+// Ads & Sponsors: every removal always on (the user's, 2026-11-16), shown, not a switch; an older
+// page's switch press changes nothing.
 func TestAdfreePage(t *testing.T) {
 	a, _ := startApp(t)
 	r := spot(t, a, "adfree")
-	if row := findRow(t, r, "Remove Ads: On"); row[1] != "set" || row[4] != "ads" {
-		t.Fatalf("%v", row)
+	for _, title := range []string{"Remove Ads: Always On", "Remove Sponsor Reads: Always On", "Remove Self-Promotion: Always On",
+		"Compare with a Second Copy: Always On"} {
+		if row := findRow(t, r, title); row[1] == "set" {
+			t.Fatalf("%v", row)
+		}
 	}
-	if r := spot(t, a, "set", "ads"); r.message != "Ads: Off" || a.settings().Ads {
+	if r := spot(t, a, "set", "ads"); r.message != "Ad removal is always on" || !a.settings().Ads || !a.cleanSettings().Ads {
 		t.Errorf("%+v", r)
 	}
-	b, _ := os.ReadFile(filepath.Join(a.opts.dir, "config.json"))
-	if !strings.Contains(string(b), `"remove_ads": false`) {
-		t.Errorf("saved %s", b)
-	}
-	findRow(t, spot(t, a, "adfree"), "Remove Ads: Off")
 }
 
 // The phone page's Pocket Casts calls: sign in and out, settings (keys never read back), Up Next.
@@ -392,8 +392,8 @@ func TestPhoneAccount(t *testing.T) {
 	if code, _ := call("POST", "pc/settings", `{"ads":false,"upNext":3,"youTubeKey":" K1 "}`); code != 200 {
 		t.Fatal(code)
 	}
-	_, s := call("GET", "pc/settings", "")
-	if s["ads"] != false || s["upNext"] != 3.0 || s["youtube"] != true || s["youTubeKey"] != nil {
+	_, s := call("GET", "pc/settings", "") // ad removal: always on, whatever is sent
+	if s["ads"] != true || s["upNext"] != 3.0 || s["youtube"] != true || s["youTubeKey"] != nil || !a.settings().Ads {
 		t.Errorf("settings %v", s)
 	}
 	// Download Next from the phone: its count kept as the Q2's (the sync it asks for runs at once), then stopped with 0
