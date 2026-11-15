@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.5"
+const version = "q2-v1.6"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -79,7 +79,6 @@ type app struct {
 	loads    map[string]*load     // previews being fetched or fetched, by what was asked
 	pageAt   time.Time            // the Q2's page, last asked (device)
 	openSeen string               // the page's opening note as last read
-	gate     time.Time            // the Q2's page opened: the menu waits for a sync to end well after it
 	rescanAt time.Time            // the episodes on the card last compared (rescan)
 	scanned  string               // and what they were: their count and bytes
 	placeMap map[uint32]int       // Q2 Pod's resume ring as last read (places), and its file's time
@@ -269,7 +268,7 @@ func (a *app) run() {
 				logMemory(a)
 			}
 			s := a.settings()
-			if a.sy.listening() { // a podcast playing: its place is synced, so stay
+			if a.sy.listening() { // a podcast playing: the Q2's Up Next follows it (nowPlaying), so stay
 				a.touch(false)
 			}
 			a.mu.Lock()

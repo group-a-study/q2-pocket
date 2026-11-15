@@ -18,15 +18,15 @@ import (
 	"q2-pocket/internal/q2"
 )
 
-// Signed in to Pocket Casts, the app keeps the Q2 and the account in step, as pocketcli does from a
-// computer (sync): the podcasts subscribed, Up Next (its first few episodes kept downloaded, played in
-// order from the Q2's Up Next page: pages.go), and
-// where each downloaded episode was left. Q2 Pod's resume ring says where the Q2 is in each
-// episode; a place it saves is sent to Pocket Casts, mapped from the episode as cut to the episode as
-// served (clean.Report.Original), and a place moved on another device is put in the ring (setPlaces:
-// a Q2 Pod that can) mapped the other way. An episode whose place goes near its end was played: it
-// is marked so and leaves Up Next. The episode the Q2 starts becomes Up Next's first, and goes in the
-// listening history, as the apps do.
+// Signed in to Pocket Casts, the app takes the account's changes onto the Q2 and sends none back (the
+// user's, 2026-11-15: no two-way sync): the podcasts subscribed, Up Next as the Q2's own (order.go: an
+// episode new to it goes first on the Q2; its first few kept downloaded, played in order from the Q2's
+// Up Next page: pages.go), and where each downloaded episode was left elsewhere: a place moved on
+// another device is put in Q2 Pod's resume ring (setPlaces: a Q2 Pod that can), mapped from the
+// episode as served to the episode as cut (clean.Report.Kept), and one played elsewhere is forgotten
+// there. What the Q2 does stays on the Q2: an episode it plays to its end (its place gone near the end,
+// or Q2 Podcast's note) leaves the Q2's Up Next only, and the one it starts goes first in it. What the
+// user asks for in Pocket itself (a star, Add to Up Next, a subscription) still goes to the account.
 
 const (
 	syncEvery   = 3 * time.Minute
@@ -59,6 +59,12 @@ type syncState struct {
 	// it does, and takes it off this list.
 	Off  map[string]bool `json:"kept_off,omitempty"`
 	Next int             `json:"download_next,omitempty"` // Download Next: this many more still to be asked for
+	// The Q2's own Up Next (order.go): its order, by Pocket Casts id; the account's Up Next at the last
+	// sync; and those the Q2 played to their end while the account's still has them.
+	Order    []string        `json:"q2_up_next,omitempty"`
+	Seen     map[string]bool `json:"up_next_seen,omitempty"`
+	Finished map[string]bool `json:"finished_on_q2,omitempty"`
+	Playing  string          `json:"q2_playing,omitempty"` // the episode the Q2 started last, by Pocket Casts id
 }
 
 // epSync is an episode's place as last seen on both sides.
@@ -140,7 +146,7 @@ func (s *syncer) status() (time.Time, string, bool) {
 	return s.at, s.err, s.busy
 }
 
-// listening is whether a podcast is playing (signed in: its place is to be synced).
+// listening is whether a podcast is playing (signed in: the Q2's Up Next follows it).
 func (s *syncer) listening() bool {
 	if !s.a.pc.SignedIn() {
 		return false
@@ -207,20 +213,20 @@ func (s *syncer) once(ctx context.Context) {
 		s.fail(err)
 		return
 	}
-	s.mu.Lock()
-	s.upnext, s.upAt = up, time.Now()
-	s.mu.Unlock()
 	inprog, err := pc.InProgress(ctx)
 	if err != nil {
 		s.fail(err)
 		return
 	}
 	s.setList("inprog", inprog, nil)
-	s.doneNotes(ctx)
+	s.doneNotes()
 	s.places(ctx, inprog)
-	s.nowPlaying(ctx)
+	s.nowPlaying()
+	up = s.reorder(up, s.playingUUID()) // the Q2's own Up Next, the account's changes taken in
+	s.mu.Lock()
+	s.upnext, s.upAt = up, time.Now()
+	s.mu.Unlock()
 	s.starred(ctx)
-	s.filePlaces(ctx)
 	s.save()
 	s.mu.Lock() // the account and the Q2 agree: synced (the app opens on it, menu)
 	s.at, s.err = time.Now(), ""
@@ -565,16 +571,6 @@ func (s *syncer) held() bool {
 	return s.st.Held
 }
 
-// failedSince is why a sync that ended after t failed, "" when none has.
-func (s *syncer) failedSince(t time.Time) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.failAt.After(t) {
-		return s.err
-	}
-	return ""
-}
-
 // allPending is whether Download All is still asking for Up Next's episodes.
 func (s *syncer) allPending() bool {
 	s.mu.Lock()
@@ -604,7 +600,9 @@ func cutLength(r *clean.Report, e library.EpisodeInfo) float64 {
 	return float64(e.Duration)
 }
 
-// places keeps each downloaded episode's place the same on the Q2 and in Pocket Casts.
+// places takes each downloaded episode's place from Pocket Casts when it moved there (decide), and
+// notes the Q2's own, sending nothing: a place the Q2 moved stays the Q2's, and one it took to the
+// end is the episode finished here (finishedHere).
 func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 	lib, pc := s.a.lib, s.a.pc
 	eps, _ := lib.Downloaded()
@@ -664,22 +662,21 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 			Known: known, Done: st.Done, NearEnd: st.Q2 > 0 && float64(st.Q2) >= cutLength(r, e)-playedTail.Seconds()}
 		what, at := decide(v)
 		switch what {
-		case push:
-			if pc.SetPlace(ctx, e.PC, e.Feed.PC, at) == nil {
-				st.Q2, st.PC, st.Done = q, at, false
+		case push: // the Q2's own, kept here
+			st.Q2 = q
+			if known {
+				st.PC = srv.PlayedUpTo
 			}
 		case pull:
 			pulls[e.Path], pulled[e.Path] = int(r.Kept(float64(at))), st
 			st.Q2, st.PC, st.Done = q, at, false
-		case played:
-			if pc.SetStatus(ctx, e.PC, e.Feed.PC, pocketcasts.Played) == nil {
-				pc.UpNextRemove(ctx, e.Feed.PC)
-				st.Q2, st.Done = 0, true
-				if known {
-					st.PC = srv.PlayedUpTo
-				}
-				s.played(e)
+		case played: // finished on the Q2: out of the Q2's Up Next, the account's left as it is
+			st.Q2, st.Done = 0, true
+			if known {
+				st.PC = srv.PlayedUpTo
 			}
+			s.finishedHere(e.Feed.PC)
+			s.played(e)
 		case forget:
 			pulls[e.Path], pulled[e.Path] = 0, st
 			st.Q2, st.PC, st.Done = q, srv.PlayedUpTo, srv.Status == pocketcasts.Played
@@ -704,12 +701,11 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 }
 
 // doneNotes takes Q2 Podcast's notes (its /mnt/data/ringnav-done: "F\t<path>" an episode played to
-// its end on the Q2, "D\t<path>" a file deleted there). A finished one is marked played in Pocket
-// Casts and leaves Up Next, as the apps do at an episode's end (the user's, 2026-11-15: what was
-// heard on the Q2 stayed in the phone's Up Next, since a place the Q2 forgets at the end looked like
-// none); a deleted one is kept off the Q2 (keptOff). The file is taken (renamed) first, so a note
-// written meanwhile waits for the next sync; one Pocket Casts couldn't take is put back.
-func (s *syncer) doneNotes(ctx context.Context) {
+// its end on the Q2, "D\t<path>" a file deleted there). A finished one leaves the Q2's Up Next, though
+// Pocket wasn't running near its end (a place the Q2 forgets at the end looked like none), and the
+// account's is left as it is (the user's, 2026-11-15: no two-way sync); a deleted one is kept off the
+// Q2 (keptOff). The file is taken (renamed) first, so a note written meanwhile waits for the next sync.
+func (s *syncer) doneNotes() {
 	path := s.a.opts.done
 	if path == "" {
 		return
@@ -724,8 +720,6 @@ func (s *syncer) doneNotes(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	pc := s.a.pc
-	var left []string
 	for _, line := range strings.Split(string(b), "\n") {
 		kind, p, ok := strings.Cut(strings.TrimSpace(line), "\t")
 		e, found := s.a.lib.ByPath(p)
@@ -740,12 +734,7 @@ func (s *syncer) doneNotes(ctx context.Context) {
 		if kind != "F" || e.PC == "" || e.Feed.PC == "" {
 			continue
 		}
-		if ctx.Err() != nil || pc.SetStatus(ctx, e.PC, e.Feed.PC, pocketcasts.Played) != nil {
-			left = append(left, line)
-			continue
-		}
-		pc.UpNextRemove(ctx, e.Feed.PC)
-		logf("%q played to its end on the Q2: marked played in Pocket Casts, out of Up Next", e.Title)
+		logf("%q played to its end on the Q2: out of the Q2's Up Next", e.Title)
 		s.mu.Lock()
 		st := s.st.Eps[id]
 		if st == nil {
@@ -753,16 +742,10 @@ func (s *syncer) doneNotes(ctx context.Context) {
 			s.st.Eps[id] = st
 		}
 		st.Q2, st.Done = 0, true
-		s.upAt = time.Time{} // Up Next changed: the pages ask again
 		s.mu.Unlock()
+		s.finishedHere(e.Feed.PC)
 		if e.OnCard {
 			s.played(e)
-		}
-	}
-	if len(left) > 0 {
-		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			f.WriteString(strings.Join(left, "\n") + "\n")
-			f.Close()
 		}
 	}
 	os.Remove(taken)
@@ -791,9 +774,10 @@ func abs(n int) int {
 	return n
 }
 
-// nowPlaying: the episode Q2 Pod saved a place in last, newly, becomes Up Next's first and goes in
-// the listening history (a place this app put there aside).
-func (s *syncer) nowPlaying(ctx context.Context) {
+// nowPlaying: the episode Q2 Pod saved a place in last, newly, goes first in the Q2's Up Next
+// (startedHere), as the apps put what plays at the top of theirs; nothing is sent (a place this app
+// put in the ring aside).
+func (s *syncer) nowPlaying() {
 	key, _ := s.a.recentPlace()
 	s.mu.Lock()
 	if key == 0 || key == s.st.Last {
@@ -810,12 +794,10 @@ func (s *syncer) nowPlaying(ctx context.Context) {
 	eps, _ := s.a.lib.Downloaded()
 	for _, e := range eps {
 		if e.PC != "" && e.Feed.PC != "" && placeKey(e.Path) == key {
-			ep := asServed(e)
-			s.a.pc.UpNextAdd(ctx, "now", ep)
-			s.a.pc.Listened(ctx, ep)
 			s.mu.Lock()
-			s.upAt = time.Time{} // Up Next changed: the page asks again
+			s.st.Playing = e.Feed.PC
 			s.mu.Unlock()
+			s.startedHere(e.Feed.PC)
 			return
 		}
 	}
@@ -892,6 +874,7 @@ func (s *syncer) signedOut() {
 	s.mu.Lock()
 	s.lists, s.upnext, s.err, s.at = map[string]*pcList{}, nil, "", time.Time{}
 	s.st.Eps, s.st.Migrated = map[string]*epSync{}, false
+	s.st.Order, s.st.Seen, s.st.Finished, s.st.Playing = nil, nil, nil, "" // the Q2's Up Next was the account's
 	s.stars, s.starsOut = "", false
 	s.mu.Unlock()
 	s.save()

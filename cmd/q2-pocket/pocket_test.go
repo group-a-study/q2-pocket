@@ -204,18 +204,18 @@ func TestSync(t *testing.T) {
 		t.Error("an episode not in Up Next downloaded")
 	}
 
-	// Played on the Q2: its place sent, and it becomes Up Next's current, and the history's
+	// Played on the Q2: nothing sent (the user's, 2026-11-15: no two-way sync), not its place, not Up
+	// Next's current, not the history; it's the Q2's playing episode
 	ring(t, card, e2.Path, 7)
 	a.sy.once(ctx)
-	sent := f.saw("/sync/update_episode")
-	if len(sent) == 0 || sent[len(sent)-1]["uuid"] != epA2 || sent[len(sent)-1]["position"] != 7.0 {
-		t.Fatalf("place sent: %v", sent)
+	if sent := f.saw("/sync/update_episode"); len(sent) != 0 {
+		t.Errorf("a place sent: %v", sent)
 	}
-	if now := f.saw("/up_next/play_now"); len(now) != 1 || now[0]["episode"].(map[string]any)["uuid"] != epA2 {
-		t.Errorf("play_now: %v", now)
+	if now, h := f.saw("/up_next/play_now"), f.saw("/history/do"); len(now)+len(h) != 0 {
+		t.Errorf("play_now %v, history %v", now, h)
 	}
-	if h := f.saw("/history/do"); len(h) != 1 || h[0]["episode"] != epA2 {
-		t.Errorf("history: %v", h)
+	if a.sy.playingUUID() != epA2 {
+		t.Errorf("playing: %q", a.sy.playingUUID())
 	}
 
 	// Moved on another device: put in the ring
@@ -230,21 +230,22 @@ func TestSync(t *testing.T) {
 	// Q2 Pod takes it: its newest place, which isn't the Q2 playing it
 	ring(t, card, e1.Path, 300, e2.Path, 7)
 	a.sy.once(ctx)
-	if now := f.saw("/up_next/play_now"); len(now) != 1 {
-		t.Errorf("a place put in the ring taken for playing: %v", now)
+	if a.sy.playingUUID() != epA2 {
+		t.Errorf("a place put in the ring taken for playing: %q", a.sy.playingUUID())
 	}
 
-	// Finished on the Q2 (its place gone near the end): played, and out of Up Next
+	// Finished on the Q2 (its place gone near the end): out of the Q2's Up Next, the account's as it was,
+	// nothing sent
 	ring(t, card, e1.Path, 300)
 	a.sy.once(ctx)
-	if p := f.saw("/sync/update_episode"); p[len(p)-1]["status"] != 3.0 || p[len(p)-1]["uuid"] != epA2 {
-		t.Errorf("played: %v", p[len(p)-1])
-	}
 	f.mu.Lock()
-	removed := strings.Join(f.removed, ",")
+	removed, served := strings.Join(f.removed, ","), strings.Join(f.upnext, ",")
 	f.mu.Unlock()
-	if removed != epA2 {
-		t.Errorf("removed from Up Next: %q", removed)
+	if p := f.saw("/sync/update_episode"); len(p) != 0 || removed != "" || served != epA2+","+epA1 {
+		t.Errorf("sent %v, removed %q, the account's Up Next %q", p, removed, served)
+	}
+	if up, _ := a.sy.upNext(); len(up) != 1 || up[0].UUID != epA1 {
+		t.Errorf("the Q2's Up Next: %v", up)
 	}
 
 	// Now Playing's star: the episode starred in Pocket Casts
@@ -264,12 +265,12 @@ func TestSync(t *testing.T) {
 
 	// the pages
 	up := spot(t, a, "upnext")
-	if len(up.rows) != 4 || up.rows[0][1] != "dlall" || up.rows[0][2] != "Download All" || up.rows[0][3] != "Every episode is on the Q2" ||
+	if len(up.rows) != 3 || up.rows[0][1] != "dlall" || up.rows[0][2] != "Download All" || up.rows[0][3] != "Every episode is on the Q2" ||
 		up.rows[1][1] != "dlnext" || up.rows[1][2] != "Download Next 5" || up.rows[1][5] != "nextn" {
 		t.Fatalf("Up Next page: %v", up.rows)
 	}
-	up.rows = up.rows[2:] // Download All and Download Next first, then the episodes
-	if up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[1][4] != "1" || up.rows[0][5] != "unq:"+podA+":"+epA2 {
+	up.rows = up.rows[2:] // Download All and Download Next first, then the episodes: the Q2's, the finished one gone
+	if up.rows[0][0] != "action" || up.rows[0][1] != "upplay" || up.rows[0][4] != "0" || up.rows[0][5] != "unq:"+podA+":"+epA1 {
 		t.Errorf("Up Next page: %v", up.rows)
 	}
 	// Download All: a second press turns it on, a sync through the whole of Up Next ends it, a press
@@ -308,37 +309,29 @@ func TestSync(t *testing.T) {
 		t.Error("Download All left Up Next held")
 	}
 	a.sy.downloadAll(false)
-	// The Q2's page opened (its menu asked after openGap): a sync at once, and the menu waits for it
+	// The Q2's page opened (its menu asked after openGap): the menu at once, no wait for a sync (the
+	// user's, 2026-11-15, as before 1.1); one runs behind it
 	a.mu.Lock()
 	a.pageAt = time.Time{}
 	a.mu.Unlock()
-	if m := spot(t, a, "menu"); len(m.rows) != 1 || m.rows[0][2] != "Syncing with Pocket Casts…" || m.message != "refresh" {
+	if m := spot(t, a, "menu"); m.rows[0][1] != "upnext" {
 		t.Errorf("menu as it opens: %+v", m)
-	}
-	if m := spot(t, a, "menu"); m.rows[0][2] != "Syncing with Pocket Casts…" {
-		t.Errorf("menu before the sync: %v", m.rows)
-	}
-	a.sy.once(a.ctx)
-	if m := spot(t, a, "menu"); m.rows[0][2] == "Syncing with Pocket Casts…" || m.rows[0][1] != "upnext" {
-		t.Errorf("menu after the sync: %v", m.rows)
 	}
 	// Q2 Podcast notes each opening of the page in /tmp/q2-pocket.open: a new note is an opening at once,
 	// however soon; the same note again (the menu shown again) isn't
 	a.opts.open = filepath.Join(t.TempDir(), "open")
 	for i, note := range []string{"100\n", "100\n", "200\n"} {
 		os.WriteFile(a.opts.open, []byte(note), 0o644)
-		gated := spot(t, a, "menu").rows[0][2] == "Syncing with Pocket Casts…"
-		if want := i != 1; gated != want {
-			t.Errorf("note %d %q: gated %v", i, note, gated)
+		if opened, want := a.opening("menu"), i != 1; opened != want {
+			t.Errorf("note %d %q: opening %v", i, note, opened)
 		}
-		a.sy.once(a.ctx)
 	}
 	// pressed: Up Next from there, an .m3u on the card for Q2 Pod to play in order
 	if r := spot(t, a, "upplay", "0"); r.message != "Playing Up Next" {
 		t.Errorf("upplay: %+v", r)
 	}
 	m3u := filepath.Join(a.opts.dir, "upnext.m3u")
-	if b, _ := os.ReadFile(m3u); string(b) != "#EXTM3U\n"+e2.Path+"\n"+e1.Path+"\n" {
+	if b, _ := os.ReadFile(m3u); string(b) != "#EXTM3U\n"+e1.Path+"\n" {
 		t.Errorf("the playlist: %q", b)
 	}
 	if b, _ := os.ReadFile(a.opts.play); !strings.HasSuffix(string(b), " "+m3u+"\n") {
@@ -503,9 +496,9 @@ func TestNewReleasesFirst(t *testing.T) {
 }
 
 // Q2 Podcast's notes, a cancel and Download Next (the user's, 2026-11-15): an episode played to its
-// end on the Q2 is marked played in Pocket Casts and leaves Up Next, though Pocket wasn't running
-// near its end; one deleted there, or cancelled here, isn't fetched by Up Next again; Download Next
-// asks for the next few not on the Q2, after those Up Next keeps downloaded.
+// end on the Q2 leaves the Q2's Up Next, though Pocket wasn't running near its end, and nothing is
+// sent (no two-way sync); one deleted there, or cancelled here, isn't fetched by Up Next again;
+// Download Next asks for the next few not on the Q2, after those Up Next keeps downloaded.
 func TestNotesKeptOffAndDownloadNext(t *testing.T) {
 	a, _, f := startSigned(t)
 	ctx := context.Background()
@@ -531,10 +524,14 @@ func TestNotesKeptOffAndDownloadNext(t *testing.T) {
 		}
 	}
 	onCard(epA2, epA1) // Up Next's two, kept downloaded
-	// a third in Up Next, past the two kept: Download Next 1 asks for it
+	// a third in Up Next, put last from the Q2 (so last in the Q2's too), past the two kept: Download
+	// Next 1 asks for it
 	f.mu.Lock()
 	f.upnext = []string{epA2, epA1, epA3}
 	f.mu.Unlock()
+	if r := spot(t, a, "upq:"+podA+":"+epA3); r.message != "Added to Up Next" {
+		t.Fatalf("upq: %+v", r)
+	}
 	a.change(func(s *settings) { s.UpNext, s.NextCount = 2, 1 })
 	a.sy.forget()
 	a.sy.once(ctx)
@@ -577,15 +574,16 @@ func TestNotesKeptOffAndDownloadNext(t *testing.T) {
 	e2, _ := a.lib.PCEpisode(podA, epA2)
 	os.WriteFile(a.opts.done, []byte("F\t"+e2.Path+"\nD\t"+e1.Path+"\n"), 0o644)
 	a.sy.once(ctx)
-	played := false
-	for _, b := range f.saw("/sync/update_episode") {
-		played = played || b["uuid"] == epA2 && b["status"] == 3.0
-	}
 	f.mu.Lock()
 	removed := strings.Join(f.removed, ",")
 	f.mu.Unlock()
-	if !played || !strings.Contains(removed, epA2) {
-		t.Errorf("finished on the Q2: played %v, removed from Up Next %q", played, removed)
+	if p := f.saw("/sync/update_episode"); len(p) != 0 || removed != "" {
+		t.Errorf("finished on the Q2: sent %v, removed from the account's Up Next %q", p, removed)
+	}
+	for _, e := range func() []pocketcasts.Episode { up, _ := a.sy.upNext(); return up }() {
+		if e.UUID == epA2 {
+			t.Error("finished on the Q2, but still in the Q2's Up Next")
+		}
 	}
 	if !a.sy.keptOff(e1.Key + ":" + e1.EID) {
 		t.Error("deleted on the Q2, but not kept off")
@@ -596,5 +594,73 @@ func TestNotesKeptOffAndDownloadNext(t *testing.T) {
 	// a press fetches a kept-off episode, and it isn't kept off any more
 	if r := spot(t, a, "get", e3.Key+":"+e3.EID); r.message == "" || a.sy.keptOff(e3.Key+":"+e3.EID) {
 		t.Errorf("get: %+v, kept off %v", r, a.sy.keptOff(e3.Key+":"+e3.EID))
+	}
+}
+
+// The Q2's own Up Next (the user's, 2026-11-15: no two-way sync, the Q2 takes the account's changes,
+// an episode new to Up Next at the top of the Q2's): the account's order at first; the episode the Q2
+// starts goes first; one added elsewhere goes in after it; one taken out elsewhere leaves; one
+// finished on the Q2 leaves the Q2's only; one added again is new again. Nothing is sent.
+func TestQ2UpNextOrder(t *testing.T) {
+	a, card, f := startSigned(t)
+	ctx := context.Background()
+	order := func() string {
+		up, _ := a.sy.upNext()
+		var ids []string
+		for _, e := range up {
+			ids = append(ids, e.UUID[len(e.UUID)-1:])
+		}
+		return strings.Join(ids, "")
+	}
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		a.sy.once(ctx)
+		e1, _ := a.lib.PCEpisode(podA, epA1)
+		e2, _ := a.lib.PCEpisode(podA, epA2)
+		if e1.OnCard && e2.OnCard {
+			break
+		}
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("Up Next not downloaded: %+v", a.lib.DL.Jobs())
+		}
+	}
+	set := func(ids ...string) {
+		f.mu.Lock()
+		f.upnext = ids
+		f.mu.Unlock()
+		a.sy.once(ctx)
+	}
+	if got := order(); got != "21" {
+		t.Fatalf("the account's order to start with: %q", got)
+	}
+	e1, _ := a.lib.PCEpisode(podA, epA1)
+	ring(t, card, e1.Path, 40) // the Q2 starts the second: first in the Q2's
+	a.sy.once(ctx)
+	if got := order(); got != "12" {
+		t.Errorf("started on the Q2: %q", got)
+	}
+	if set(epA2, epA1, epA3); order() != "132" { // added on the phone, last in the account's
+		t.Errorf("a new one, after the one playing: %q", order())
+	}
+	if set(epA1, epA3); order() != "13" { // taken out on the phone
+		t.Errorf("one taken out elsewhere: %q", order())
+	}
+	os.WriteFile(a.opts.done, []byte("F\t"+e1.Path+"\n"), 0o644) // finished on the Q2
+	if a.sy.once(ctx); order() != "3" {
+		t.Errorf("finished on the Q2: %q", order())
+	}
+	if set(epA1, epA3); order() != "3" { // still in the account's: not back on the Q2
+		t.Errorf("a finished one came back: %q", order())
+	}
+	if set(epA1, epA3, epA2); order() != "23" { // added again: new, at the top
+		t.Errorf("added again: %q", order())
+	}
+	f.mu.Lock()
+	removed := len(f.removed)
+	f.mu.Unlock()
+	if p, now, h := f.saw("/sync/update_episode"), f.saw("/up_next/play_now"), f.saw("/history/do"); len(p)+len(now)+len(h)+removed != 0 {
+		t.Errorf("sent: places %v, play_now %v, history %v, %d removed", p, now, h, removed)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.opts.dir, "sync.json")); !strings.Contains(string(b), `"q2_up_next":["`+epA2+`","`+epA3+`"]`) {
+		t.Errorf("sync.json: %s", b)
 	}
 }

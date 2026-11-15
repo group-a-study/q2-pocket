@@ -364,7 +364,8 @@ func (a *app) upNextPut(id, where string) q2spot.Reply {
 	if err := a.pc.UpNextAdd(ctx, where, e); err != nil {
 		return q2spot.Fail(q2spot.Offline, say(err))
 	}
-	a.sy.kick()
+	a.sy.placed(e, where, a.sy.playingUUID()) // in the Q2's Up Next now, where asked
+	a.sy.save()
 	if where == "next" {
 		return q2spot.Reply{Message: "First in Up Next"}
 	}
@@ -381,7 +382,8 @@ func (a *app) upNextRemove(id string) q2spot.Reply {
 	if err := a.pc.UpNextRemove(ctx, uuid); err != nil {
 		return q2spot.Fail(q2spot.Offline, say(err))
 	}
-	a.sy.kick()
+	a.sy.unplaced(uuid)
+	a.sy.save()
 	return q2spot.Reply{Message: "Taken out of Up Next"}
 }
 
@@ -566,7 +568,7 @@ func (a *app) adfreePage() q2spot.Reply {
 	if a.pc.SignedIn() {
 		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order; Download All on Up Next gets the rest"),
 			act("set", "nextn", "Download Next: "+plural(s.nextCount(), "Episode"), "How many Download Next on Up Next asks for"),
-			act("set", "deleteplayed", "Delete Played Episodes: "+onOff(s.DeletePlayed), "Once Pocket Casts marks them played"))
+			act("set", "deleteplayed", "Delete Played Episodes: "+onOff(s.DeletePlayed), "Once they are played, here or elsewhere"))
 	}
 	return q2spot.Reply{Rows: rows}
 }

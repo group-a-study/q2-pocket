@@ -311,8 +311,16 @@ func (w *web) pcAction(rw http.ResponseWriter, ctx context.Context, b pcBody) {
 			return
 		}
 		err, msg = a.pc.UpNextAdd(ctx, b.Action, e), "Added to Up Next"
+		if err == nil { // in the Q2's Up Next now, where asked
+			a.sy.placed(e, b.Action, a.sy.playingUUID())
+			a.sy.save()
+		}
 	case "remove":
 		err, msg = a.pc.UpNextRemove(ctx, b.UUID), "Taken out of Up Next"
+		if err == nil {
+			a.sy.unplaced(b.UUID)
+			a.sy.save()
+		}
 	case "star", "unstar":
 		err, msg = a.pc.Star(ctx, b.Podcast, b.UUID, b.Action == "star"), "Starred"
 		if b.Action == "unstar" {

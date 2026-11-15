@@ -279,10 +279,9 @@ func (a *app) opening(op string) bool {
 func (a *app) device(req q2spot.Request) q2spot.Reply {
 	a.touch(false)
 	opened := a.opening(req.Op)
-	if opened && a.pc.SignedIn() { // the Q2's page opened: sync with Pocket Casts at once
-		a.mu.Lock()
-		a.gate = time.Now()
-		a.mu.Unlock()
+	// The Q2's page opened: Pocket Casts' changes taken in now, behind the menu, which opens at once
+	// (the user's, 2026-11-15: no wait for a sync at each opening, as before 1.1)
+	if opened && a.pc.SignedIn() {
 		a.sy.kick()
 	}
 	ok := func(msg string) q2spot.Reply { return q2spot.Reply{Message: msg} }
@@ -477,41 +476,7 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 	return q2spot.Fail(q2spot.Unsupported, "Update Pocket on the card")
 }
 
-// syncGate is the page Pocket shows in its menu's place from its opening (device) until a sync with
-// Pocket Casts has ended well after it: syncing, or why it couldn't, with Try Again.
-func (a *app) syncGate() ([]q2spot.Row, bool) {
-	a.mu.Lock()
-	gate := a.gate
-	a.mu.Unlock()
-	if gate.IsZero() || !a.pc.SignedIn() {
-		return nil, false
-	}
-	if at, _, _ := a.sy.status(); at.After(gate) {
-		a.mu.Lock()
-		a.gate = time.Time{}
-		a.mu.Unlock()
-		return nil, false
-	}
-	retry := act("sync", "", "Try Again", "Sync with Pocket Casts")
-	if !a.online() {
-		return []q2spot.Row{info("Connect to Wi-Fi", "Pocket syncs with Pocket Casts before it opens"), retry}, true
-	}
-	if why := a.sy.failedSince(gate); why != "" {
-		_, _, busy := a.sy.status()
-		if !busy {
-			return []q2spot.Row{info("Couldn't sync with Pocket Casts", why), retry}, true
-		}
-	}
-	if _, _, busy := a.sy.status(); !busy {
-		a.sy.kick() // a sync asked for while offline went unrun: one now (the wake holds one at most)
-	}
-	return []q2spot.Row{info("Syncing with Pocket Casts…", "Pocket opens once it has synced")}, true
-}
-
 func (a *app) menu() q2spot.Reply {
-	if rows, waiting := a.syncGate(); waiting {
-		return live(rows, "", true)
-	}
 	shows := a.lib.Shows()
 	jobs := a.lib.DL.Jobs()
 	busy := a.lib.Refreshing()
