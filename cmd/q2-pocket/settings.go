@@ -10,8 +10,9 @@ import (
 	"q2-pocket/internal/q2"
 )
 
-// settings is .pocket/config.json. Missing choices take their defaults: adverts and sponsor reads
-// cut, copies compared, Up Next's first upNextFirst episodes downloaded, played episodes kept.
+// settings is .pocket/config.json. Missing choices take their defaults: every ad removal on
+// (adverts, sponsor reads, self-promotion, copies compared: the user's, 2026-11-15), Up Next's first
+// upNextFirst episodes downloaded, played episodes kept, the sync one-way.
 type settings struct {
 	Key         string `json:"web_key"`      // the QR code's: signs a browser in
 	PIN         string `json:"pin"`          // the Q2's screen's, typed with the address
@@ -24,6 +25,7 @@ type settings struct {
 	UpNext       int  `json:"download_up_next"`    // Up Next kept downloaded: -1 all, else its first this many
 	NextCount    int  `json:"download_next_count"` // Download Next's: the next this many of Up Next not on the Q2
 	DeletePlayed bool `json:"delete_played"`
+	TwoWay       bool `json:"sync_two_way"`     // the sync sends the Q2's places, played episodes and what plays too
 	Version      int  `json:"settings_version"` // settingsVersion once loadSettings has brought it up to date
 
 	YouTubeKey    string `json:"youtube_api_key,omitempty"`
@@ -52,11 +54,13 @@ func (s settings) nextCount() int {
 }
 
 // settingsVersion 2: Up Next's default became its first upNextFirst, not all of it, so a config
-// saved before (which holds the old default, -1) takes the new one once.
-const settingsVersion = 2
+// saved before (which holds the old default, -1) takes the new one once. 3: every ad removal on
+// (the user's, 2026-11-15), self-promotion's too, once.
+const settingsVersion = 3
 
 func defaults() settings {
-	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, Copy: true, UpNext: upNextFirst, NextCount: nextFirst}
+	return settings{IdleMinutes: 15, Ads: true, Sponsors: true, SelfPromo: true, Copy: true, UpNext: upNextFirst,
+		NextCount: nextFirst}
 }
 
 // loadSettings reads config.json, making the key and PIN the first time; they stay, so a phone
@@ -77,9 +81,10 @@ func loadSettings(dir string) settings {
 		s.IdleMinutes = 0
 	}
 	if s.Version < settingsVersion {
-		if s.UpNext < 0 {
+		if s.Version < 2 && s.UpNext < 0 {
 			s.UpNext = upNextFirst
 		}
+		s.Ads, s.Sponsors, s.SelfPromo, s.Copy = true, true, true, true
 		s.Version, dirty = settingsVersion, true
 	}
 	if dirty {

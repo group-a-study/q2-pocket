@@ -568,12 +568,23 @@ func (a *app) adfreePage() q2spot.Reply {
 	if a.pc.SignedIn() {
 		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order; Download All on Up Next gets the rest"),
 			act("set", "nextn", "Download Next: "+plural(s.nextCount(), "Episode"), "How many Download Next on Up Next asks for"),
-			act("set", "deleteplayed", "Delete Played Episodes: "+onOff(s.DeletePlayed), "Once they are played, here or elsewhere"))
+			act("set", "deleteplayed", "Delete Played Episodes: "+onOff(s.DeletePlayed), "Once they are played, here or elsewhere"),
+			a.twoWayRow(s))
 	}
 	return q2spot.Reply{Rows: rows}
 }
 
 var upNextChoices = []int{-1, 0, 3, 5, 10, 20, 50}
+
+// twoWayRow is the sync's setting (the user's, 2026-11-15): one-way, the Q2 takes the account's
+// changes and sends none back; two-way, the Q2's places, finished episodes and the episode it plays
+// go to Pocket Casts too.
+func (a *app) twoWayRow(s settings) q2spot.Row {
+	if s.TwoWay {
+		return act("set", "twoway", "Sync: Two-Way", "Places, finished episodes and what plays go to Pocket Casts too")
+	}
+	return act("set", "twoway", "Sync: One-Way", "The Q2 takes Pocket Casts' changes and sends none back")
+}
 
 func (a *app) setOption(name string) q2spot.Reply {
 	msg := ""
@@ -603,6 +614,12 @@ func (a *app) setOption(name string) q2spot.Reply {
 		case "deleteplayed":
 			s.DeletePlayed = !s.DeletePlayed
 			msg = "Delete played: " + onOff(s.DeletePlayed)
+		case "twoway":
+			s.TwoWay = !s.TwoWay
+			msg = "Sync: One-Way"
+			if s.TwoWay {
+				msg = "Sync: Two-Way"
+			}
 		case "upnext":
 			next := upNextChoices[0]
 			for i, n := range upNextChoices {
@@ -624,7 +641,7 @@ func (a *app) setOption(name string) q2spot.Reply {
 	if err != nil {
 		return q2spot.Fail(q2spot.Error, "Couldn't save the setting")
 	}
-	if name == "upnext" {
+	if name == "upnext" || name == "twoway" {
 		a.sy.kick()
 	}
 	if msg == "" {

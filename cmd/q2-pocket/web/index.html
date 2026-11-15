@@ -132,7 +132,8 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
           <option value="-1">All of it</option><option value="0">None</option><option value="3">The first 3</option><option value="5">The first 5</option>
           <option value="10">The first 10</option><option value="20">The first 20</option><option value="50">The first 50</option>
           <option value="100">The first 100</option></select></div></div>
-        <label class="switch"><input type="checkbox" id="setDeletePlayed"><span class="grow"><b>Delete played episodes</b><br><span class="sub">Once Pocket Casts marks them played, unless Up Next still has them.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setDeletePlayed"><span class="grow"><b>Delete played episodes</b><br><span class="sub">Once they are played, here or elsewhere, unless Up Next still has them.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setTwoWay"><span class="grow"><b>Two-way sync</b><br><span class="sub">Off: the Q2 takes Pocket Casts' changes and sends none back. On: the Q2's places, finished episodes and what it plays go to Pocket Casts too.</span></span></label>
       </div>
       <h2>Finding sponsor segments</h2>
       <div class="card">
@@ -481,6 +482,7 @@ async function renderSettings() {
   $("setSelfPromo").checked = s.selfPromo;
   $("setCopy").checked = s.copy;
   $("setDeletePlayed").checked = s.deletePlayed;
+  $("setTwoWay").checked = s.twoWay;
   $("setUpNext").value = String(s.upNext);
   $("ytKey").placeholder = s.youtube ? "Set (type a new one to change it)" : "Not set";
   $("spSecret").placeholder = s.spotify ? "Set (type a new one to change it)" : "Client secret";
@@ -534,6 +536,7 @@ setting("setSponsors", "sponsors", t => t.checked);
 setting("setSelfPromo", "selfPromo", t => t.checked);
 setting("setCopy", "copy", t => t.checked);
 setting("setDeletePlayed", "deletePlayed", t => t.checked);
+setting("setTwoWay", "twoWay", t => t.checked);
 setting("setUpNext", "upNext", t => parseInt(t.value, 10));
 $("ytSave").onclick = async () => {
   try { await api("pc/settings", {youTubeKey: $("ytKey").value}); $("ytKey").value = ""; toast("Saved"); renderSettings(); } catch (err) { toast(err.message); }

@@ -174,3 +174,37 @@ func (a *app) fetchFile(f pocketcasts.File) error {
 	}
 	return os.Rename(part, dst)
 }
+
+// filePlaces sends each downloaded file's place to Pocket Casts, as places does an episode's (two-way).
+func (s *syncer) filePlaces(ctx context.Context) {
+	files, err, _ := s.uploaded()
+	if err != nil {
+		return
+	}
+	ring := s.a.places()
+	for _, f := range files {
+		p := s.a.filePath(f)
+		if !fileThere(p) {
+			continue
+		}
+		id := "file:" + f.UUID
+		q := ring[placeKey(p)]
+		s.mu.Lock()
+		st := s.st.Eps[id]
+		if st == nil {
+			st = &epSync{Q2: -1}
+			s.st.Eps[id] = st
+		}
+		s.mu.Unlock()
+		switch {
+		case q > 0 && q != st.Q2:
+			if s.a.pc.SetFilePlace(ctx, f.UUID, q, pocketcasts.InProgress) == nil {
+				st.Q2, st.PC = q, q
+			}
+		case q == 0 && st.Q2 > 0 && f.Duration > 0 && st.Q2 >= int(f.Duration)-int(playedTail.Seconds()):
+			if s.a.pc.SetFilePlace(ctx, f.UUID, int(f.Duration), pocketcasts.Played) == nil {
+				st.Q2, st.Done = 0, true
+			}
+		}
+	}
+}

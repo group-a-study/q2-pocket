@@ -84,10 +84,10 @@ type pcBody struct {
 	Action          string
 	Name            string
 
-	Ads, Sponsors, SelfPromo, Copy, DeletePlayed *bool
-	UpNext                                       *int
-	Count                                        int // Download Next's (0: stop)
-	YouTubeKey, SpotifyID, SpotifySecret         *string
+	Ads, Sponsors, SelfPromo, Copy, DeletePlayed, TwoWay *bool
+	UpNext                                               *int
+	Count                                                int // Download Next's (0: stop)
+	YouTubeKey, SpotifyID, SpotifySecret                 *string
 }
 
 func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post bool, raw []byte) {
@@ -138,7 +138,7 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 		s := a.settings()
 		eps, ads, sp, sec, known := a.cutSoFar()
 		reply(rw, http.StatusOK, map[string]any{"ads": s.Ads, "sponsors": s.Sponsors, "selfPromo": s.SelfPromo,
-			"copy": s.Copy, "upNext": s.UpNext, "deletePlayed": s.DeletePlayed, "youtube": s.YouTubeKey != "",
+			"copy": s.Copy, "upNext": s.UpNext, "deletePlayed": s.DeletePlayed, "twoWay": s.TwoWay, "youtube": s.YouTubeKey != "",
 			"spotify": s.SpotifyID != "" && s.SpotifySecret != "", "idleMinutes": s.IdleMinutes,
 			"cut": map[string]any{"episodes": eps, "ads": ads, "sponsors": sp, "seconds": sec, "learned": known}})
 	case route == "settings" && post:
@@ -153,6 +153,7 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 			set(&s.SelfPromo, body.SelfPromo)
 			set(&s.Copy, body.Copy)
 			set(&s.DeletePlayed, body.DeletePlayed)
+			set(&s.TwoWay, body.TwoWay)
 			if body.UpNext != nil {
 				s.UpNext = min(max(*body.UpNext, -1), 10000)
 			}

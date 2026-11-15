@@ -664,3 +664,55 @@ func TestQ2UpNextOrder(t *testing.T) {
 		t.Errorf("sync.json: %s", b)
 	}
 }
+
+// Sync: Two-Way (the user's, 2026-11-15: a setting, one-way unless chosen): the Q2's own go back too, a
+// place it saves sent, the episode it starts first in the account's Up Next and in the history, one it
+// finished marked played and out of the account's Up Next; the Q2's own Up Next goes on as one-way's.
+func TestTwoWaySync(t *testing.T) {
+	a, card, f := startSigned(t)
+	ctx := context.Background()
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		a.sy.once(ctx)
+		e1, _ := a.lib.PCEpisode(podA, epA1)
+		e2, _ := a.lib.PCEpisode(podA, epA2)
+		if e1.OnCard && e2.OnCard {
+			break
+		}
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("Up Next not downloaded: %+v", a.lib.DL.Jobs())
+		}
+	}
+	if r := spot(t, a, "set", "twoway"); r.message != "Sync: Two-Way" || !a.settings().TwoWay {
+		t.Fatalf("twoway: %+v", r)
+	}
+	if row := findRow(t, spot(t, a, "adfree"), "Sync: Two-Way"); row[1] != "set" || row[4] != "twoway" {
+		t.Errorf("setting row %v", row)
+	}
+	e1, _ := a.lib.PCEpisode(podA, epA1)
+	ring(t, card, e1.Path, 7)
+	a.sy.once(ctx)
+	if sent := f.saw("/sync/update_episode"); len(sent) == 0 || sent[len(sent)-1]["uuid"] != epA1 || sent[len(sent)-1]["position"] != 7.0 {
+		t.Fatalf("place sent: %v", sent)
+	}
+	if now := f.saw("/up_next/play_now"); len(now) != 1 || now[0]["episode"].(map[string]any)["uuid"] != epA1 {
+		t.Errorf("play_now: %v", now)
+	}
+	if h := f.saw("/history/do"); len(h) != 1 || h[0]["episode"] != epA1 {
+		t.Errorf("history: %v", h)
+	}
+	ring(t, card) // its place forgotten at its end, as Q2 Pod does, and noted finished
+	os.WriteFile(a.opts.done, []byte("F\t"+e1.Path+"\n"), 0o644)
+	a.sy.once(ctx)
+	f.mu.Lock()
+	removed := strings.Join(f.removed, ",")
+	f.mu.Unlock()
+	if p := f.saw("/sync/update_episode"); p[len(p)-1]["status"] != 3.0 || p[len(p)-1]["uuid"] != epA1 || removed != epA1 {
+		t.Errorf("finished: %v, removed %q", p[len(p)-1], removed)
+	}
+	if up, _ := a.sy.upNext(); len(up) != 1 || up[0].UUID != epA2 {
+		t.Errorf("the Q2's Up Next: %v", up)
+	}
+	if r := spot(t, a, "set", "twoway"); r.message != "Sync: One-Way" || a.settings().TwoWay {
+		t.Errorf("back to one-way: %+v", r)
+	}
+}
