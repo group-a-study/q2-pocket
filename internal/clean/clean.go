@@ -41,7 +41,7 @@ type Settings struct {
 	Copy      bool // fetch a second copy when it has other adverts, to compare
 
 	// YouTubeFallback: an episode's YouTube video nothing can check (no captions, nothing in
-	// SponsorBlock) gives way to its feed's copy; off, the video comes, marked Ads Not Removed
+	// SponsorBlock) gives way to its feed's copy; off, the video comes as it is
 	YouTubeFallback bool
 
 	YouTubeKey               string // YouTube Data API key, to find an episode's video

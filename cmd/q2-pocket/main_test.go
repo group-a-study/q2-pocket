@@ -228,8 +228,8 @@ func TestQ2Page(t *testing.T) {
 	if r := spot(t, a, "get", ep[4]); r.message != "Downloading" {
 		t.Fatalf("get %+v", r)
 	}
-	page = until(t, "the download", func() answer { return spot(t, a, "show", showKey) },
-		func(r answer) bool { return r.rows[1][0] == "local" })
+	page = until(t, "the download", func() answer { return spot(t, a, "show", showKey) }, // in place, and done
+		func(r answer) bool { return r.rows[1][0] == "local" && strings.HasSuffix(r.rows[1][3], "Downloaded") })
 	local := page.rows[1]
 	want := filepath.Join(card, "Podcasts", "Night Shift", "2024-02-15 - Episode 45.mp3")
 	if local[1] != want || local[4] != "album" || !strings.HasPrefix(local[5], "del:") || !strings.HasSuffix(local[3], "Downloaded") {
@@ -391,7 +391,7 @@ func TestCardImportAndState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { a.cancel(); a.lib.DL.Stop(); a.ln.Close() }()
+	defer func() { a.cancel(); a.lib.DL.Stop(); a.ln.Close(); a.waitBG(10 * time.Second) }()
 	if shows := a.lib.Shows(); len(shows) != 1 || shows[0].Title != "A" {
 		t.Fatalf("%+v", shows)
 	}

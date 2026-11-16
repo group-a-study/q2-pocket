@@ -33,7 +33,8 @@ type VideoCopy struct {
 	Used   []string // the report's sources
 	Shift  float64  // seconds its feed's copy runs longer (Report.Shift)
 	// Unchecked: nothing could check it for sponsor reads (no captions, nothing in SponsorBlock),
-	// why; it comes anyway, marked Ads Not Removed, unless Settings.YouTubeFallback
+	// its report's note; it comes anyway, unless Settings.YouTubeFallback, and isn't marked Ads Not
+	// Removed (the user's, 2026-11-17: "just leave it without tag")
 	Unchecked string
 }
 
@@ -96,7 +97,7 @@ func (c *Cleaner) FindVideo(ctx context.Context, e Episode) (*VideoCopy, string)
 		if c.Settings().YouTubeFallback {
 			return nil, "nothing could check its YouTube video for sponsor reads (no captions, nothing in SponsorBlock)"
 		}
-		vc.Unchecked = "Ads not removed: its YouTube video has no captions and nothing in SponsorBlock yet"
+		vc.Unchecked = "From YouTube: not checked (no captions, nothing in SponsorBlock)"
 		vc.Used = append(vc.Used, "nothing to check it with: no captions, nothing in SponsorBlock")
 	}
 	return vc, ""
@@ -287,7 +288,7 @@ func (c *Cleaner) VideoDone(ctx context.Context, e Episode, vc *VideoCopy, lengt
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rep := &Report{Checked: time.Now(), Length: length, Video: vc.Video.ID, Shift: vc.Shift,
-		Sources: append([]string(nil), vc.Used...), Note: vc.Unchecked, Unchecked: vc.Unchecked != ""}
+		Sources: append([]string(nil), vc.Used...), Note: vc.Unchecked}
 	for _, k := range vc.Cuts {
 		if k.From < length {
 			k.To = math.Min(k.To, length)

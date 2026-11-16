@@ -87,8 +87,10 @@ func TestFindVideo(t *testing.T) {
 	pocketcasts.Cache, youtube.Base, sponsor.SponsorBlockBase = srv.URL+"/cache", srv.URL, srv.URL
 	dir := t.TempDir()
 	c := &Cleaner{Dir: dir, API: srv.Client(), Agent: "test", PC: pocketcasts.New(srv.Client(), "test", pocketcasts.Token{}),
-		Settings: func() Settings { return Settings{Ads: true, Sponsors: true, SelfPromo: true, YouTubeFallback: fallback} },
-		YouTube:  &youtube.Client{HTTP: srv.Client(), Agent: "test"}}
+		Settings: func() Settings {
+			return Settings{Ads: true, Sponsors: true, SelfPromo: true, YouTubeFallback: fallback}
+		},
+		YouTube: &youtube.Client{HTTP: srv.Client(), Agent: "test"}}
 	path := filepath.Join(dir, "Lex Fridman Podcast", "2026-11-10 - #504.m4a")
 	e := Episode{Key: "lex", EID: "504", Path: path, Show: "Lex Fridman Podcast", Title: "#504 – Russia-Ukraine War",
 		Duration: 10875, Podcast: "lex-uuid", UUID: "ep-uuid"}
@@ -122,15 +124,15 @@ func TestFindVideo(t *testing.T) {
 	}
 
 	// nothing to check the video with (no captions, nothing in SponsorBlock): it comes all the same,
-	// marked Ads Not Removed, for a Remove Ads Again once SponsorBlock has its segments; with the
-	// fallback set, the feed's copy comes instead
+	// not marked Ads Not Removed, for a Remove Ads Again once SponsorBlock has its segments; with
+	// the fallback set, the feed's copy comes instead
 	noCaptions.Store(true)
 	vc, why = c.FindVideo(context.Background(), e)
 	if vc == nil || vc.Unchecked == "" || len(vc.Cuts) != 0 {
 		t.Fatalf("unchecked video: %+v %s", vc, why)
 	}
 	rep, _ = c.VideoDone(context.Background(), e, vc, 10428.9)
-	if !rep.Unchecked || !strings.HasPrefix(rep.Summary(), "Ads not removed") || !Load(dir, "lex", "504").Unchecked {
+	if rep.Unchecked || rep.Summary() != "From YouTube: not checked (no captions, nothing in SponsorBlock)" || Load(dir, "lex", "504").Unchecked {
 		t.Fatalf("unchecked report %+v %q", rep, rep.Summary())
 	}
 	fallback = true

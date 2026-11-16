@@ -32,7 +32,7 @@ import (
 	"q2-pocket/internal/youtube"
 )
 
-const version = "q2-v1.16"
+const version = "q2-v1.17"
 
 // userAgent is the app's name to the hosts it fetches from: hosts count listens by it.
 var userAgent = "Q2Pocket/" + version[len("q2-v"):] + " (Shanling Q2; Q2 Pod card app)"
@@ -59,6 +59,7 @@ type options struct {
 }
 
 type app struct {
+	bg     sync.WaitGroup // the work start sets going (the sync, feed refreshes, retagging): waited for at the end
 	opts   options
 	lib    *library.Library
 	pc     *pocketcasts.Client
@@ -238,15 +239,15 @@ func start(o options) (*app, error) {
 		}
 	})
 	lib.DL.Start()
-	go a.sy.run(ctx)
+	a.goBG(func() { a.sy.run(ctx) })
 	if a.settings().Rechecked < recheckRound { // once: the episodes that went on with their ads
-		go func() {
+		a.goBG(func() {
 			n := a.redoAll()
 			a.change(func(s *settings) { s.Rechecked = recheckRound })
 			logf("Ads Not Removed: %d episodes asked for again, to be checked for ads", n)
-		}()
+		})
 	}
-	go func() {
+	a.goBG(func() {
 		lib.Retag(ctx) // episodes an older version left untagged, with the art the feeds had
 		for first := true; ; first = false {
 			lib.RefreshAll(ctx, staleAfter)
@@ -259,8 +260,29 @@ func start(o options) (*app, error) {
 			case <-time.After(refreshEvery):
 			}
 		}
-	}()
+	})
 	return a, nil
+}
+
+// goBG runs fn in the background, as work the app's end waits for (waitBG).
+func (a *app) goBG(fn func()) {
+	a.bg.Add(1)
+	go func() {
+		defer a.bg.Done()
+		fn()
+	}()
+}
+
+// waitBG waits for the background work to see the app's context end and stop, so nothing is still
+// writing to the card as the app goes; at most d.
+func (a *app) waitBG(d time.Duration) {
+	done := make(chan struct{})
+	go func() { a.bg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		logf("background work still under way after %v: stopping anyway", d)
+	}
 }
 
 func (a *app) shutdown() { a.once.Do(func() { close(a.quit) }) }
@@ -275,6 +297,7 @@ func (a *app) run() {
 		case <-a.quit:
 			a.cancel()
 			a.lib.DL.Stop() // the episode under way kept, to resume next time
+			a.waitBG(10 * time.Second)
 			a.ln.Close()
 			a.state.Remove()
 			os.Remove(a.opts.browse)

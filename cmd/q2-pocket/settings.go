@@ -32,8 +32,8 @@ type settings struct {
 	Rechecked int `json:"rechecked,omitempty"`
 	// YouTubeFallback: an episode's YouTube video that nothing can check for sponsor reads (no
 	// captions, nothing in SponsorBlock) gives way to the feed's MP3. Off by default (the user's,
-	// 2026-11-17): the video comes, marked Ads Not Removed, for a Remove Ads Again once SponsorBlock
-	// has its segments (they submit them themselves).
+	// 2026-11-17): the video comes as it is, unmarked, for a Remove Ads Again once SponsorBlock has
+	// its segments (they submit them themselves).
 	YouTubeFallback bool `json:"youtube_fallback,omitempty"`
 
 	YouTubeKey    string `json:"youtube_api_key,omitempty"`
