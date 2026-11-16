@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -594,8 +595,18 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 			u, err = fresh, l.transfer(ctx, fresh, e, l.partPath(j.Key, j.EID), progress, note)
 		}
 	}
-	if bare := untracked(u); err != nil && ctx.Err() == nil && bare != u { // Chartable's link gone: past it
-		err = l.transfer(ctx, bare, e, l.partPath(j.Key, j.EID), progress, note)
+	for _, alt := range Fallbacks(u) { // a dead link in front of it, or a file that moved: past it
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+		err = l.transfer(ctx, alt, e, l.partPath(j.Key, j.EID), progress, note)
+	}
+	if err != nil && ctx.Err() == nil && gone(err) && l.o.Elsewhere != nil { // its copy elsewhere
+		note("Looking for it elsewhere")
+		if alt := l.o.Elsewhere(ctx, e); alt != "" && alt != u {
+			l.logf("download %q: gone at its address (%v); found elsewhere: %s", e.Title, err, alt)
+			err = l.transfer(ctx, alt, e, l.partPath(j.Key, j.EID), progress, note)
+		}
 	}
 	if errors.As(err, &no) {
 		return permanent{err}
@@ -824,4 +835,46 @@ func untracked(u string) string {
 		return untracked(rest)
 	}
 	return u
+}
+
+// Fallbacks is the other addresses of an episode's audio worth a try when u fails: u past a link
+// that no longer works (untracked), and an Internet Archive file at its lasting address (relocated).
+func Fallbacks(u string) []string {
+	var out []string
+	for _, v := range []string{untracked(u), relocated(u), relocated(untracked(u))} {
+		if v != u && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// archiveFile is an Internet Archive file's address on one of its servers, which changes as items
+// move between them (https://ia902607.us.archive.org/15/items/<item>/<file>).
+var archiveFile = regexp.MustCompile(`^https?://ia\d+\.us\.archive\.org/\d+/items/([^/]+)/(.+)$`)
+
+// relocated is an Internet Archive file at its lasting address, which sends on to wherever the file
+// is now (the user's, 2026-11-16: a podcast's feed named a server that no longer answered for it);
+// u for any other address.
+func relocated(u string) string {
+	if m := archiveFile.FindStringSubmatch(u); m != nil {
+		return "https://archive.org/download/" + m[1] + "/" + m[2]
+	}
+	return u
+}
+
+// gone is whether a download's failure says its address is no more (the server refused it, or the
+// host is gone or isn't who it was), rather than the network failing for now.
+func gone(err error) bool {
+	var no refused
+	if errors.As(err, &no) {
+		return true
+	}
+	msg := err.Error()
+	for _, s := range []string{"no such host", "x509:", "certificate", "connection refused", "server misbehaving"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }

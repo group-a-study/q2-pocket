@@ -60,6 +60,9 @@ type Options struct {
 	// Version is the app's: a download's crashes count against the version they happened in, and a
 	// new version tries it in full again
 	Version string
+	// Elsewhere finds an episode's audio somewhere else, its address gone (a dead link, a file the
+	// publisher took down): "" for nowhere; nil, no looking
+	Elsewhere func(ctx context.Context, e EpisodeInfo) string
 	// Replaced: a copy on the card replaced by a new one, cut again (Remove Ads Again), the seconds
 	// of the old copy the new one leaves out (clean.Recut); nil for none
 	Replaced func(path string, cuts [][2]float64)

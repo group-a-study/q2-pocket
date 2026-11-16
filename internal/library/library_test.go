@@ -979,3 +979,21 @@ func TestUntrackedBlubrry(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+// An Internet Archive file at the server its feed named, which no longer answers, is asked for at
+// its lasting address; a failure says whether the address is gone or the network failed.
+func TestFallbacks(t *testing.T) {
+	ia := "https://ia902607.us.archive.org/15/items/thore-husfeldt-31-03-2023-11.12/Thore%20Husfeldt.m4a"
+	if got := Fallbacks(ia); len(got) != 1 || got[0] != "https://archive.org/download/thore-husfeldt-31-03-2023-11.12/Thore%20Husfeldt.m4a" {
+		t.Error(got)
+	}
+	if got := Fallbacks("https://chrt.fm/track/X/host.example/a.mp3"); len(got) != 1 || got[0] != "https://host.example/a.mp3" {
+		t.Error(got)
+	}
+	if got := Fallbacks("https://host.example/a.mp3"); len(got) != 0 {
+		t.Error(got)
+	}
+	if !gone(refused{404}) || !gone(errors.New(`Get "x": dial tcp: lookup h: no such host`)) || gone(errors.New("i/o timeout")) {
+		t.Error("gone")
+	}
+}

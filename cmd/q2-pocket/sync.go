@@ -499,25 +499,33 @@ func (s *syncer) fromShow(ctx context.Context, e pocketcasts.Episode) pocketcast
 }
 
 // sameEpisode is e in a show's list: by its id, else the nearest of those with its title (letters
-// and digits alike) published within a month of it; nil for none.
+// and digits alike, a season's or rebroadcast's mark and a leading number set aside: coreKey)
+// published within a month of it, or, e being a rebroadcast, its original, however long before; nil
+// for none (the user's, 2026-11-16: Conversations with Coleman published two episodes again a day
+// later as "… [S2 Ep.35]", and This Is Actually Happening's rebroadcast was gone, its original not).
 func sameEpisode(e pocketcasts.Episode, eps []pocketcasts.CacheEpisode) *pocketcasts.CacheEpisode {
 	for i := range eps {
 		if eps[i].UUID == e.UUID {
 			return &eps[i]
 		}
 	}
-	want, when := titleKey(e.Title), e.Date()
+	want, when := coreKey(e.Title), e.Date()
 	if want == "" || when.IsZero() {
 		return nil
 	}
+	again := rebroadcast(e.Title)
 	var best *pocketcasts.CacheEpisode
-	gap := 31 * 24 * time.Hour
+	var gap time.Duration
 	for i := range eps {
 		at, err := time.Parse(time.RFC3339, eps[i].Published)
-		if err != nil || titleKey(eps[i].Title) != want {
+		if err != nil || coreKey(eps[i].Title) != want {
 			continue
 		}
-		if d := at.Sub(when).Abs(); d <= gap {
+		d := at.Sub(when).Abs()
+		if d > 31*24*time.Hour && !(again && at.Before(when)) {
+			continue
+		}
+		if best == nil || d < gap {
 			best, gap = &eps[i], d
 		}
 	}

@@ -31,7 +31,10 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.13"
+const version = "q2-v1.14"
+
+// userAgent is the app's name to the hosts it fetches from: hosts count listens by it.
+var userAgent = "Q2Pocket/" + version[len("q2-v"):] + " (Shanling Q2; Q2 Pod card app)"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -181,7 +184,7 @@ func start(o options) (*app, error) {
 		return nil, err
 	}
 	feeds := tlsroots.Transport()
-	agent := "Q2Pocket/" + version[len("q2-v"):] + " (Shanling Q2; Q2 Pod card app)" // hosts count listens by it
+	agent := userAgent
 	set := loadSettings(o.dir)
 	pc := pocketcasts.New(&http.Client{Transport: feeds, Timeout: 60 * time.Second}, agent, loadAccount(o.dir))
 	pc.Saved = func(t pocketcasts.Token) { saveAccount(o.dir, t) }
@@ -191,19 +194,21 @@ func start(o options) (*app, error) {
 		Settings: func() clean.Settings { return a.cleanSettings() },
 		Free:     memFree, Log: logMem}
 	lib, err := library.Open(library.Options{
-		Dir:      o.dir,
-		Root:     filepath.Join(o.card, "Podcasts"),
-		Client:   &http.Client{Transport: feeds, Timeout: 60 * time.Second},
-		Fetch:    &http.Client{Transport: tlsroots.Transport()},
-		Agent:    agent,
-		Ready:    o.ready,
-		PC:       pc,
-		Clean:    cl,
-		Log:      logMem,
-		Crashed:  o.crashed,
-		Version:  version,
-		Hold:     func() bool { return a.sy.holding() },
-		Replaced: func(path string, cuts [][2]float64) { a.replaced(path, cuts) },
+		Dir:     o.dir,
+		Root:    filepath.Join(o.card, "Podcasts"),
+		Client:  &http.Client{Transport: feeds, Timeout: 60 * time.Second},
+		Fetch:   &http.Client{Transport: tlsroots.Transport()},
+		Agent:   agent,
+		Ready:   o.ready,
+		PC:      pc,
+		Clean:   cl,
+		Log:     logMem,
+		Crashed: o.crashed,
+		Version: version,
+		Hold:    func() bool { return a.sy.holding() },
+		// an episode gone at its address: looked for in its show's list, Apple's directory, Podchaser
+		Elsewhere: func(ctx context.Context, e library.EpisodeInfo) string { return a.elsewhere(ctx, e) },
+		Replaced:  func(path string, cuts [][2]float64) { a.replaced(path, cuts) },
 	})
 	if err != nil {
 		return nil, err
