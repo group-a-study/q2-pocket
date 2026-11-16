@@ -194,6 +194,7 @@ type pcBody struct {
 	Name            string
 
 	Ads, Sponsors, SelfPromo, Copy, DeletePlayed, TwoWay *bool
+	YouTubeFallback                                      *bool
 	UpNext                                               *int
 	NextCount                                            *int // Download Next's count, chosen on the page
 	Count                                                int  // Download Next's (0: stop)
@@ -249,7 +250,8 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 		eps, ads, sp, sec, known := a.cutSoFar()
 		reply(rw, http.StatusOK, map[string]any{"ads": true, "sponsors": true, "selfPromo": true,
 			"copy": true, "upNext": s.UpNext, "deletePlayed": s.DeletePlayed, "twoWay": s.TwoWay, "youtube": s.YouTubeKey != "",
-			"spotify": s.SpotifyID != "" && s.SpotifySecret != "", "idleMinutes": s.IdleMinutes,
+			"youtubeFallback": s.YouTubeFallback,
+			"spotify":         s.SpotifyID != "" && s.SpotifySecret != "", "idleMinutes": s.IdleMinutes,
 			"cut": map[string]any{"episodes": eps, "ads": ads, "sponsors": sp, "seconds": sec, "learned": known}})
 	case route == "settings" && post:
 		err := a.change(func(s *settings) {
@@ -263,6 +265,7 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 				s.NextCount = *body.NextCount
 			}
 			set(&s.TwoWay, body.TwoWay)
+			set(&s.YouTubeFallback, body.YouTubeFallback)
 			if body.UpNext != nil {
 				s.UpNext = min(max(*body.UpNext, -1), 10000)
 			}

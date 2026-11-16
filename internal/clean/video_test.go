@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"q2-pocket/internal/pocketcasts"
@@ -49,6 +50,8 @@ func TestFindVideo(t *testing.T) {
 		cues += fmt.Sprintf("\n00:%02d:%02d.000 --> 00:%02d:%02d.500\nline %d of the conversation\n", 2+i/60, i%60, 2+i/60, i%60, i)
 	}
 	captions := toJSON3(sponsor.Transcript([]byte(cues), "text/vtt"))
+	var noCaptions atomic.Bool
+	fallback := false
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/cache/mobile/show_notes/full/"):
@@ -64,6 +67,10 @@ func TestFindVideo(t *testing.T) {
 "streamingData":{"adaptiveFormats":[{"itag":140,"url":"https://v/140","mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","contentLength":"168781199","audioSampleRate":"44100"}]},
 "captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"%s/api/timedtext?v=2hJkprFnzhY&lang=en","languageCode":"en"}]}}}`, srv.URL)
 		case r.URL.Path == "/api/timedtext":
+			if noCaptions.Load() {
+				http.NotFound(w, r)
+				return
+			}
 			if r.URL.Query().Get("fmt") != "json3" {
 				http.Error(w, "fmt", 400)
 				return
@@ -80,7 +87,7 @@ func TestFindVideo(t *testing.T) {
 	pocketcasts.Cache, youtube.Base, sponsor.SponsorBlockBase = srv.URL+"/cache", srv.URL, srv.URL
 	dir := t.TempDir()
 	c := &Cleaner{Dir: dir, API: srv.Client(), Agent: "test", PC: pocketcasts.New(srv.Client(), "test", pocketcasts.Token{}),
-		Settings: func() Settings { return Settings{Ads: true, Sponsors: true, SelfPromo: true} },
+		Settings: func() Settings { return Settings{Ads: true, Sponsors: true, SelfPromo: true, YouTubeFallback: fallback} },
 		YouTube:  &youtube.Client{HTTP: srv.Client(), Agent: "test"}}
 	path := filepath.Join(dir, "Lex Fridman Podcast", "2026-11-10 - #504.m4a")
 	e := Episode{Key: "lex", EID: "504", Path: path, Show: "Lex Fridman Podcast", Title: "#504 – Russia-Ukraine War",
@@ -113,6 +120,25 @@ func TestFindVideo(t *testing.T) {
 	if got := rep.ToFeed(rep.FromFeed(3600)); math.Abs(got-3600) > 0.01 {
 		t.Fatalf("ToFeed back = %.1f", got)
 	}
+
+	// nothing to check the video with (no captions, nothing in SponsorBlock): it comes all the same,
+	// marked Ads Not Removed, for a Remove Ads Again once SponsorBlock has its segments; with the
+	// fallback set, the feed's copy comes instead
+	noCaptions.Store(true)
+	vc, why = c.FindVideo(context.Background(), e)
+	if vc == nil || vc.Unchecked == "" || len(vc.Cuts) != 0 {
+		t.Fatalf("unchecked video: %+v %s", vc, why)
+	}
+	rep, _ = c.VideoDone(context.Background(), e, vc, 10428.9)
+	if !rep.Unchecked || !strings.HasPrefix(rep.Summary(), "Ads not removed") || !Load(dir, "lex", "504").Unchecked {
+		t.Fatalf("unchecked report %+v %q", rep, rep.Summary())
+	}
+	fallback = true
+	if vc, why := c.FindVideo(context.Background(), e); vc != nil || !strings.Contains(why, "nothing could check") {
+		t.Fatalf("with the fallback: %+v %q", vc, why)
+	}
+	fallback = false
+	noCaptions.Store(false)
 
 	// a video only its notes link to, titled otherwise and of another length: not the episode
 	e.Podcast, e.UUID = "", ""

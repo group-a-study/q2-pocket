@@ -30,6 +30,11 @@ type settings struct {
 	Version      int  `json:"settings_version"` // settingsVersion once loadSettings has brought it up to date
 	// Rechecked is the last recheckRound done: the episodes on the Q2 with their ads asked for again
 	Rechecked int `json:"rechecked,omitempty"`
+	// YouTubeFallback: an episode's YouTube video that nothing can check for sponsor reads (no
+	// captions, nothing in SponsorBlock) gives way to the feed's MP3. Off by default (the user's,
+	// 2026-11-17): the video comes, marked Ads Not Removed, for a Remove Ads Again once SponsorBlock
+	// has its segments (they submit them themselves).
+	YouTubeFallback bool `json:"youtube_fallback,omitempty"`
 
 	YouTubeKey    string `json:"youtube_api_key,omitempty"`
 	SpotifyID     string `json:"spotify_client_id,omitempty"`
@@ -126,7 +131,7 @@ func (a *app) change(fn func(*settings)) error {
 // cleanSettings is the settings as the cleaner takes them: every removal on, always.
 func (a *app) cleanSettings() clean.Settings {
 	s := a.settings()
-	return clean.Settings{Ads: true, Sponsors: true, SelfPromo: true, Copy: true,
+	return clean.Settings{Ads: true, Sponsors: true, SelfPromo: true, Copy: true, YouTubeFallback: s.YouTubeFallback,
 		YouTubeKey: s.YouTubeKey, SpotifyID: s.SpotifyID, SpotifySecret: s.SpotifySecret}
 }
 

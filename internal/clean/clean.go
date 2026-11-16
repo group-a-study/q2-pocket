@@ -40,6 +40,10 @@ type Settings struct {
 	SelfPromo bool // and the show's promotion of itself (SponsorBlock's "selfpromo")
 	Copy      bool // fetch a second copy when it has other adverts, to compare
 
+	// YouTubeFallback: an episode's YouTube video nothing can check (no captions, nothing in
+	// SponsorBlock) gives way to its feed's copy; off, the video comes, marked Ads Not Removed
+	YouTubeFallback bool
+
 	YouTubeKey               string // YouTube Data API key, to find an episode's video
 	SpotifyID, SpotifySecret string // a Spotify app's, to find an episode on Spotify
 }

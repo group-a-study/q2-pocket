@@ -32,7 +32,7 @@ import (
 	"q2-pocket/internal/youtube"
 )
 
-const version = "q2-v1.15"
+const version = "q2-v1.16"
 
 // userAgent is the app's name to the hosts it fetches from: hosts count listens by it.
 var userAgent = "Q2Pocket/" + version[len("q2-v"):] + " (Shanling Q2; Q2 Pod card app)"

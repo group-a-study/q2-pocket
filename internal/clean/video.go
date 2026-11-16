@@ -32,6 +32,9 @@ type VideoCopy struct {
 	Chaps  []sponsor.Chapter
 	Used   []string // the report's sources
 	Shift  float64  // seconds its feed's copy runs longer (Report.Shift)
+	// Unchecked: nothing could check it for sponsor reads (no captions, nothing in SponsorBlock),
+	// why; it comes anyway, marked Ads Not Removed, unless Settings.YouTubeFallback
+	Unchecked string
 }
 
 const (
@@ -88,7 +91,13 @@ func (c *Cleaner) FindVideo(ctx context.Context, e Episode) (*VideoCopy, string)
 		}
 	}
 	if !c.planVideo(ctx, e, vc) {
-		return nil, "nothing could check its YouTube video for sponsor reads (no captions, nothing in SponsorBlock)"
+		// the user's, 2026-11-17: no fallback unless asked for; they add the video's segments to
+		// SponsorBlock themselves and Remove Ads Again then
+		if c.Settings().YouTubeFallback {
+			return nil, "nothing could check its YouTube video for sponsor reads (no captions, nothing in SponsorBlock)"
+		}
+		vc.Unchecked = "Ads not removed: its YouTube video has no captions and nothing in SponsorBlock yet"
+		vc.Used = append(vc.Used, "nothing to check it with: no captions, nothing in SponsorBlock")
 	}
 	return vc, ""
 }
@@ -176,8 +185,8 @@ func sameEpisode(e Episode, v *youtube.Video, page bool) (bool, string) {
 // planVideo finds what to cut from the video, in its own seconds: SponsorBlock's segments, the
 // sponsor reads and pointers its captions have, its description's chapters named as sponsors, and
 // the show notes' timestamps and the feed's chapters when the episode is the video's length. False
-// when nothing could check it (no captions, and SponsorBlock has nothing for it): the feed's copy
-// is checked instead, its adverts and all.
+// when nothing could check it (no captions, and SponsorBlock has nothing for it): it comes marked
+// Ads Not Removed, or, with Settings.YouTubeFallback, the feed's copy comes instead.
 func (c *Cleaner) planVideo(ctx context.Context, e Episode, vc *VideoCopy) bool {
 	v := vc.Video
 	set := c.Settings()
@@ -250,9 +259,6 @@ func (c *Cleaner) planVideo(ctx context.Context, e Episode, vc *VideoCopy) bool 
 			}
 		}
 	}
-	if !checked {
-		return false
-	}
 	var cuts []Cut
 	for _, s := range segs {
 		if d := s.To - s.From; d < minLength(s) || d > maxSponsor || s.From >= v.Length {
@@ -270,7 +276,7 @@ func (c *Cleaner) planVideo(ctx context.Context, e Episode, vc *VideoCopy) bool 
 		cuts = nil
 	}
 	vc.Cuts = cuts
-	return true
+	return checked
 }
 
 // VideoDone records a video's copy of the episode, length seconds long as fetched: its report
@@ -281,7 +287,7 @@ func (c *Cleaner) VideoDone(ctx context.Context, e Episode, vc *VideoCopy, lengt
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rep := &Report{Checked: time.Now(), Length: length, Video: vc.Video.ID, Shift: vc.Shift,
-		Sources: append([]string(nil), vc.Used...)}
+		Sources: append([]string(nil), vc.Used...), Note: vc.Unchecked, Unchecked: vc.Unchecked != ""}
 	for _, k := range vc.Cuts {
 		if k.From < length {
 			k.To = math.Min(k.To, length)
