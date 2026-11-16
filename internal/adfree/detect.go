@@ -32,8 +32,8 @@ const (
 
 // Evidence is what Detect weighs besides the stream.
 type Evidence struct {
-	Copy   []uint64          // another copy of the episode, its frames' folded hashes; nil for none
-	Peers  []func() []uint64 // other episodes' folded hashes, each read as Detect comes to it: one held at a time
+	Copy   []uint32          // another copy of the episode, its frames' folded hashes; nil for none
+	Peers  []func() []uint32 // other episodes' folded hashes, each read as Detect comes to it: one held at a time
 	Lib    *Library          // adverts found before; nil for none
 	Budget float64           // seconds the feed gives the episode, 0 if it gives none
 	Opens  bool              // a transcript of the episode opens with a sponsor read: it starts with an ad slot
@@ -49,7 +49,7 @@ type Cut struct {
 // Result is Detect's answer.
 type Result struct {
 	Cuts  []Cut
-	Learn [][]uint64 // adverts for the library (folded hashes), the other copy's among them
+	Learn [][]uint32 // adverts for the library (folded hashes), the other copy's among them
 	Parts int        // how many stitched parts the episode is in
 }
 

@@ -202,7 +202,9 @@ func (s *syncer) once(ctx context.Context) {
 	}()
 	pc := s.a.pc
 	if subsDue {
+		done := clean.Exclusive() // the account's lists, read whole: never while an episode is checked for ads
 		pods, err := pc.Podcasts(ctx)
+		done()
 		if err != nil {
 			s.fail(err)
 			return
@@ -212,12 +214,15 @@ func (s *syncer) once(ctx context.Context) {
 		s.subsAt = time.Now()
 		s.mu.Unlock()
 	}
+	done := clean.Exclusive()
 	up, err := pc.UpNext(ctx)
 	if err != nil {
+		done()
 		s.fail(err)
 		return
 	}
 	inprog, err := pc.InProgress(ctx)
+	done()
 	if err != nil {
 		s.fail(err)
 		return
@@ -887,6 +892,8 @@ func (s *syncer) list(name string) ([]pocketcasts.Episode, error, bool) {
 			defer cancel()
 			var eps []pocketcasts.Episode
 			var err error
+			done := clean.Exclusive()
+			defer done()
 			switch name {
 			case "inprog":
 				eps, err = s.a.pc.InProgress(ctx)
@@ -986,7 +993,9 @@ func (s *syncer) wait() time.Duration {
 
 // starred writes /tmp/q2-starred from the account's Starred list.
 func (s *syncer) starred(ctx context.Context) {
+	done := clean.Exclusive()
 	eps, err := s.a.pc.Starred(ctx)
+	done()
 	if err != nil {
 		return
 	}

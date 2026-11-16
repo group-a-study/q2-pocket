@@ -38,8 +38,17 @@ func pcID(e pocketcasts.Episode) string { return e.Show() + ":" + e.UUID }
 // pcRow is a Pocket Casts episode's row: hold is the op Play/Pause held sends; ctx the context a
 // row on the card plays in.
 func (a *app) pcRow(e pocketcasts.Episode, hold, ctx string, places map[uint32]int) q2spot.Row {
-	show := a.sy.title(e.Show())
 	ep, err := a.lib.PCEpisode(e.Show(), e.UUID)
+	return a.pcRowOf(e, ep, err == nil, hold, ctx, places)
+}
+
+// pcRowOf is pcRow with its episode looked up already (found: the library has it).
+func (a *app) pcRowOf(e pocketcasts.Episode, ep library.EpisodeInfo, found bool, hold, ctx string, places map[uint32]int) q2spot.Row {
+	show := a.sy.title(e.Show())
+	var err error
+	if !found {
+		err = library.ErrNoEpisode
+	}
 	if err == nil && (ep.OnCard || ep.Job != nil) {
 		r := episodeRow(ep, true, places[placeKey(ep.Path)], a.opts.dir)
 		if r.Kind == "local" {
@@ -73,8 +82,9 @@ func (a *app) pcPage(eps []pocketcasts.Episode, off int, hold func(pocketcasts.E
 	places := a.places()
 	var rows []q2spot.Row
 	end := min(off+pageSize, len(eps))
+	found, ok := a.lib.PCEpisodes(pcIDs(eps[min(off, end):end])) // the page's folders read once
 	for i := off; i < end; i++ {
-		rows = append(rows, a.pcRow(eps[i], hold(eps[i]), ctx, places))
+		rows = append(rows, a.pcRowOf(eps[i], found[i-off], ok[i-off], hold(eps[i]), ctx, places))
 	}
 	if end < len(eps) {
 		return rows, strconv.Itoa(end)
@@ -129,12 +139,7 @@ func (a *app) allRow(eps []pocketcasts.Episode) q2spot.Row {
 	if a.sy.allPending() {
 		return act("dlall", "", "Downloading All of Up Next", "Press to stop asking for the rest")
 	}
-	left := 0
-	for _, e := range eps {
-		if ep, err := a.lib.PCEpisode(e.Show(), e.UUID); err != nil || !ep.OnCard && ep.Job == nil {
-			left++
-		}
-	}
+	left := a.leftOf(eps)
 	sub := "Every episode is on the Q2"
 	if left > 0 {
 		sub = plural(left, "episode") + " not on the Q2 yet"
@@ -240,8 +245,9 @@ func (a *app) upPlay(arg string) q2spot.Reply {
 
 // anyMoving is whether an episode of eps is downloading or waiting to, so its page is asked again.
 func (a *app) anyMoving(eps []pocketcasts.Episode) bool {
-	for _, e := range eps[:min(len(eps), pageSize)] {
-		if ep, err := a.lib.PCEpisode(e.Show(), e.UUID); err == nil && ep.Job != nil && ep.Job.State != library.Failed {
+	found, ok := a.lib.PCEpisodes(pcIDs(eps[:min(len(eps), pageSize)]))
+	for i, ep := range found {
+		if ok[i] && ep.Job != nil && ep.Job.State != library.Failed {
 			return true
 		}
 	}
@@ -521,7 +527,7 @@ func (a *app) cutSoFar() (eps, ads, sponsor int, sec float64, known int) {
 				c.sec += sec
 			}
 		}
-		c.known = adfree.LoadLibrary(filepath.Join(a.opts.dir, "ads.bin")).Len()
+		c.known = adfree.CountLibrary(filepath.Join(a.opts.dir, "ads.bin"))
 		c.at = time.Now()
 	}
 	return c.eps, c.ads, c.sponsor, c.sec, c.known
@@ -565,8 +571,14 @@ func (a *app) adfreePage() q2spot.Reply {
 		info("SponsorBlock", sb),
 		info("So Far", join(plural(ads, "ad")+" and "+plural(sp, "sponsor read")+" cut", length(int(sec)), "from "+plural(eps, "episode"))),
 		info("Ads Learned", fmt.Sprintf("%d, recognised wherever they play again", known)),
-		list("readd", "", "Remove Ads Again", "Download an episode again and check it for ads anew"),
 	}
+	if not, _ := a.notRemovedEps(); len(not) > 0 {
+		rows = append(rows, list("notremoved", "", "Ads Not Removed: "+plural(len(not), "Episode"),
+			"On the Q2 with their ads: too little memory, or Pocket crashed checking them"))
+	} else {
+		rows = append(rows, info("Ads Not Removed: None", "Every episode on the Q2 was checked for ads"))
+	}
+	rows = append(rows, list("readd", "", "Remove Ads Again", "Download an episode again and check it for ads anew"))
 	if a.pc.SignedIn() {
 		rows = append(rows, act("set", "upnext", "Download Up Next: "+upn, "Kept downloaded, in order; Download All on Up Next gets the rest"),
 			act("set", "nextn", "Download Next: "+plural(s.nextCount(), "Episode"), "How many Download Next on Up Next asks for"),
@@ -590,10 +602,12 @@ func (a *app) readdPage(off int) q2spot.Reply {
 	var rows []q2spot.Row
 	for _, e := range eps[min(off, len(eps)):] {
 		cut := "Nothing cut"
-		if r := clean.Load(a.opts.dir, e.Key, e.EID); r != nil {
-			if ads, sp, _ := r.Removed(); ads+sp > 0 {
-				cut = r.Summary()
-			}
+		r := clean.Load(a.opts.dir, e.Key, e.EID)
+		if ads, sp, _ := r.Removed(); ads+sp > 0 {
+			cut = r.Summary()
+		}
+		if _, still := notRemoved(r); still {
+			cut = "Ads not removed"
 		}
 		sub := join(e.Show, cut)
 		if j := a.lib.DL.Job(e.Key, e.EID); j != nil {
@@ -602,6 +616,51 @@ func (a *app) readdPage(off int) q2spot.Reply {
 		rows = append(rows, act("redo", e.Key+":"+e.EID, e.Title, sub))
 	}
 	return live(rows, "", a.lib.DL.Busy())
+}
+
+// notRemovedPage is Ads & Sponsors' Ads Not Removed: the episodes on the Q2 that kept their ads,
+// newest first, each saying why; a press, twice, fetches one again and checks it for ads (redo),
+// and the first row does that for all of them.
+func (a *app) notRemovedPage(off int) q2spot.Reply {
+	eps, why := a.notRemovedEps()
+	if len(eps) == 0 {
+		return q2spot.Reply{Rows: []q2spot.Row{info("None", "Every episode on the Q2 was checked for ads")}}
+	}
+	var rows []q2spot.Row
+	if off == 0 {
+		rows = append(rows, act("redoall", "", "Remove Ads Again for All "+strconv.Itoa(len(eps)),
+			"Each downloaded again and checked for ads: press twice"))
+	}
+	moving := false
+	end := min(off+pageSize, len(eps))
+	for _, e := range eps[min(off, end):end] {
+		sub := join(e.Show, strings.TrimPrefix(why[e.Key+":"+e.EID], "Ads not removed: "))
+		if j := a.lib.DL.Job(e.Key, e.EID); j != nil && j.State != library.Failed {
+			moving = true
+			sub = join(e.Show, "Removing its ads again")
+			if j.Note != "" {
+				sub = join(e.Show, j.Note+"…")
+			}
+		}
+		rows = append(rows, act("redo", e.Key+":"+e.EID, e.Title, sub))
+	}
+	next := ""
+	if end < len(eps) {
+		next = strconv.Itoa(end)
+	}
+	return live(rows, next, moving)
+}
+
+// redoAllPress is Ads Not Removed's first row: the second press fetches every one again (redoAll).
+func (a *app) redoAllPress() q2spot.Reply {
+	if !a.confirm("redoall") {
+		return q2spot.Reply{Message: "Press again to download them all again and remove their ads"}
+	}
+	n := a.redoAll()
+	if n == 0 {
+		return q2spot.Reply{Message: "They're all being downloaded again already"}
+	}
+	return q2spot.Reply{Message: "Removing the ads again from " + plural(n, "episode")}
 }
 
 // redo is Remove Ads Again's press on an episode: the second downloads it again (Downloader.Redo).

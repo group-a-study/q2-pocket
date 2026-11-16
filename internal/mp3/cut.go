@@ -27,7 +27,7 @@ func (s *Stream) Write(src io.ReaderAt, dst *os.File, head []byte, cuts []Range)
 	if s.Info == 1 {
 		f := s.Frames[0]
 		b := make([]byte, f.Len)
-		if _, err := src.ReadAt(b, f.Off); err != nil {
+		if _, err := src.ReadAt(b, int64(f.Off)); err != nil {
 			return 0, err
 		}
 		if x, _ := parse(be32(b)); string(b[x.mainData():x.mainData()+4]) == "Xing" || string(b[x.mainData():x.mainData()+4]) == "Info" {
@@ -56,12 +56,12 @@ func (s *Stream) Write(src io.ReaderAt, dst *os.File, head []byte, cuts []Range)
 			end = cut[next].From
 		}
 		j, size := i, 0
-		for j < end && size+int(s.Frames[j].Len) <= cap(buf) && (j == i || s.Frames[j].Off == s.Frames[j-1].Off+int64(s.Frames[j-1].Len)) {
+		for j < end && size+int(s.Frames[j].Len) <= cap(buf) && (j == i || s.Frames[j].Off == s.Frames[j-1].Off+uint32(s.Frames[j-1].Len)) {
 			size += int(s.Frames[j].Len)
 			j++
 		}
 		buf = buf[:size]
-		if _, err := src.ReadAt(buf, s.Frames[i].Off); err != nil {
+		if _, err := src.ReadAt(buf, int64(s.Frames[i].Off)); err != nil {
 			return 0, err
 		}
 		for p, k := 0, i; k < j; k++ {

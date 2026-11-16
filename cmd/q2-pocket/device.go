@@ -141,10 +141,14 @@ func episodeRow(e library.EpisodeInfo, withShow bool, at int, dir string) q2spot
 	}
 	when := join(show, day(e.Date), length(e.Duration))
 	id := e.Key + ":" + e.EID
-	cut := "" // what was cut from it, when something was
-	if r := clean.Load(dir, e.Key, e.EID); e.OnCard && r != nil {
+	cut := "" // what was cut from it, when something was; or that its ads are still in it
+	if e.OnCard {
+		r := clean.Load(dir, e.Key, e.EID)
 		if ads, sp, _ := r.Removed(); ads+sp > 0 {
 			cut = r.Summary()
+		}
+		if _, still := notRemoved(r); still {
+			cut = "Ads not removed"
 		}
 	}
 	switch {
@@ -333,6 +337,10 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 		return a.adfreePage()
 	case "readd":
 		return a.readdPage(0)
+	case "notremoved":
+		return a.notRemovedPage(cursor(req, 0))
+	case "redoall":
+		return a.redoAllPress()
 	case "redo":
 		return a.redo(key)
 	case "set":
@@ -363,7 +371,7 @@ func (a *app) device(req q2spot.Request) q2spot.Reply {
 			"preview", "get", "cancel", "del", "sub", "refresh", "refresh1", "auto", "getlatest", "wipe", "unsub",
 			"retryall", "cancelall", "stop", "sleep", "setsleep", "upnext", "inprog", "new", "starred", "history",
 			"discover", "dlist", "dshow", "dsub", "adfree", "set", "sync", "files", "fget", "pcget", "upq", "upf", "unq", "upplay",
-			"dlall", "dlnext", "nextn", "stopafter", "resume"} {
+			"dlall", "dlnext", "nextn", "stopafter", "resume", "readd", "redo", "notremoved", "redoall"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}
 		return q2spot.Reply{Message: version, Rows: rows}

@@ -5,6 +5,7 @@
 package pocketcasts
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -685,6 +686,77 @@ func (c *Client) ShowNotes(ctx context.Context, podcast string) (map[string]Note
 		out[n.UUID] = n
 	}
 	return out, nil
+}
+
+// EpisodeNotes is one episode's show notes, read from its podcast's as they arrive: a show's run to
+// megabytes (every episode's HTML), and only the one asked for is kept (the user's, 2026-11-16:
+// a long Download All held each show's whole notes, many shows over, and Pocket ran out of memory).
+// ok false when the podcast's notes lack it.
+func (c *Client) EpisodeNotes(ctx context.Context, podcast, uuid string) (n Notes, ok bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, Cache+"/mobile/show_notes/full/"+url.PathEscape(podcast), nil)
+	if err != nil {
+		return n, false, err
+	}
+	req.Header.Set("User-Agent", c.Agent)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return n, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return n, false, StatusError{resp.StatusCode}
+	}
+	br := bufio.NewReaderSize(resp.Body, 16<<10)
+	r := io.Reader(br)
+	if b, _ := br.Peek(2); len(b) == 2 && b[0] == 0x1f && b[1] == 0x8b { // gzipped, said or not
+		gz, err := gzip.NewReader(br)
+		if err != nil {
+			return n, false, err
+		}
+		r = gz
+	}
+	d := json.NewDecoder(io.LimitReader(r, 64<<20))
+	broken := errors.New("Pocket Casts' show notes are broken")
+	// {"podcast": {"episodes": [ {...}, ... ]}}: into each object, to its key, past everything else
+	enter := func(key string) error {
+		if t, err := d.Token(); err != nil || t != json.Delim('{') {
+			return broken
+		}
+		for d.More() {
+			t, err := d.Token()
+			if err != nil {
+				return broken
+			}
+			if t == key {
+				return nil
+			}
+			var skip json.RawMessage
+			if d.Decode(&skip) != nil {
+				return broken
+			}
+		}
+		return broken
+	}
+	if enter("podcast") != nil || enter("episodes") != nil {
+		return n, false, broken
+	}
+	if t, err := d.Token(); err != nil || t != json.Delim('[') {
+		return n, false, broken
+	}
+	for d.More() {
+		var raw json.RawMessage
+		if d.Decode(&raw) != nil {
+			return n, false, broken
+		}
+		var id struct {
+			UUID string `json:"uuid"`
+		}
+		if json.Unmarshal(raw, &id) == nil && id.UUID == uuid {
+			return n, json.Unmarshal(raw, &n) == nil, nil
+		}
+	}
+	return n, false, nil
 }
 
 // List is one of Discover's lists: "trending", "popular" or "featured".

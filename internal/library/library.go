@@ -901,11 +901,13 @@ func (l *Library) refresh(ctx context.Context, key string, full bool) error {
 
 	var r *Fetched
 	var err error
+	done := clean.Exclusive() // a feed read whole takes memory: never while an episode is checked for ads
 	if pc := s.PC; pc != "" {
 		r, err = l.fetchPC(ctx, pc, u, etag)
 	} else {
 		r, err = l.fetch(ctx, u, etag, modified, prev == nil)
 	}
+	done()
 
 	l.mu.Lock()
 	s.busy = false

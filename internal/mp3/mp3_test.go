@@ -28,7 +28,7 @@ func load(t *testing.T, name string) (*Stream, []byte) {
 
 // frames is frames [from, to) of a file's bytes, whole.
 func frames(s *Stream, b []byte, from, to int) []byte {
-	return b[s.Frames[from].Off : s.Frames[to-1].Off+int64(s.Frames[to-1].Len)]
+	return b[s.Frames[from].Off : s.Frames[to-1].Off+uint32(s.Frames[to-1].Len)]
 }
 
 // Stitched is how an advert server builds a copy: the episode's tag and Info frame, then its audio
@@ -194,7 +194,7 @@ func TestLAMETag(t *testing.T) {
 	}
 	var music uint16
 	for _, fr := range o.Frames[1:] {
-		music = crcLAME(music, out[fr.Off:fr.Off+int64(fr.Len)])
+		music = crcLAME(music, out[fr.Off:fr.Off+uint32(fr.Len)])
 	}
 	if got := binary.BigEndian.Uint16(f[q+32:]); got != music {
 		t.Errorf("music CRC %04x, want %04x", got, music)

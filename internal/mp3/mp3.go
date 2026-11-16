@@ -14,15 +14,17 @@ import (
 	"errors"
 	"hash/fnv"
 	"io"
+	"math"
 	"os"
 )
 
 var ErrNotMP3 = errors.New("not an MP3 file")
 
 // Frame is one frame of a stream as read. A four-hour episode has over half a million, all held
-// while it is checked, so it is kept small: 24 bytes.
+// while it is checked, so it is kept small: 20 bytes on the Q2. Its place fits 32 bits: the card is
+// FAT32, whose files end short of 4 GB (a stream read past that ends there).
 type Frame struct {
-	Off  int64  // where it starts in the file
+	Off  uint32 // where it starts in the file
 	Hash uint32 // of its bytes (FNV-1a's 64 bits folded to 32: all adfree compares)
 	Head uint32 // its header
 	Len  uint16 // its bytes, header included
@@ -74,10 +76,10 @@ func (s *Stream) FrameAt(sec float64) int {
 func (s *Stream) At(i int) float64 { return s.Seconds(s.Info, max(i, s.Info)) }
 
 // Hashes is every frame's hash, the Info frame's too.
-func (s *Stream) Hashes() []uint64 {
-	out := make([]uint64, len(s.Frames))
+func (s *Stream) Hashes() []uint32 {
+	out := make([]uint32, len(s.Frames))
 	for i, f := range s.Frames {
-		out[i] = uint64(f.Hash)
+		out[i] = f.Hash
 	}
 	return out
 }
@@ -205,11 +207,18 @@ func (x header) mdb(frame []byte) uint16 {
 // first is taken, so a tag's bytes that look like one aren't.
 func Scan(r io.Reader) (*Stream, error) { return scan(r, 0, nil) }
 
-// ScanHashes is only the frames' hashes, folded (Stream.Hashes): a second copy of an episode, which
-// needs no more, in a third of the memory.
-func ScanHashes(r io.Reader) ([]uint64, error) {
-	var h []uint64
-	_, err := scan(r, 0, func(f Frame) { h = append(h, uint64(f.Hash)) })
+// ScanHashes is only the frames' hashes (Stream.Hashes): a second copy of an episode, which needs no
+// more, in a sixth of the memory. size, when known (> 0), is its bytes, from which the hashes are
+// sized at the first frame, so they aren't grown (copied) a few hundred thousand frames in.
+func ScanHashes(r io.Reader, size int64) ([]uint32, error) {
+	var h []uint32
+	_, err := scan(r, 0, func(f Frame) {
+		if h == nil && size > int64(f.Off) && f.Len > 0 {
+			n := (size - int64(f.Off)) / int64(f.Len)
+			h = make([]uint32, 0, min(n+n/8+16, 1<<20))
+		}
+		h = append(h, f.Hash)
+	})
 	return h, err
 }
 
@@ -282,7 +291,10 @@ func scan(r io.Reader, size int64, each func(Frame)) (*Stream, error) {
 		h.Reset()
 		h.Write(buf)
 		tag := infoFrame(x, buf)
-		f := Frame{Off: off, Len: uint16(x.length), Hash: fold(h.Sum64()), MDB: x.mdb(buf), Head: be32(buf), Tag: tag}
+		if off > math.MaxUint32 {
+			break
+		}
+		f := Frame{Off: uint32(off), Len: uint16(x.length), Hash: fold(h.Sum64()), MDB: x.mdb(buf), Head: be32(buf), Tag: tag}
 		if each != nil {
 			each(f)
 		} else {

@@ -7,10 +7,10 @@
 <style>
 :root {
   --bg: #f4f4f6; --card: #fff; --ink: #18181b; --muted: #6b6b76; --line: #e3e3e8;
-  --accent: #e2453c; --accent-ink: #fff; --bad: #c0392b; --good: #2e7d4f; --radius: 12px;
+  --accent: #e2453c; --accent-ink: #fff; --bad: #c0392b; --good: #2e7d4f; --warn: #a15c00; --radius: 12px;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #0f0f12; --card: #1b1b20; --ink: #ececf1; --muted: #9a9aa6; --line: #2c2c33; --accent: #f0675e; --accent-ink: #1a0807; }
+  :root { --bg: #0f0f12; --card: #1b1b20; --ink: #ececf1; --muted: #9a9aa6; --line: #2c2c33; --accent: #f0675e; --accent-ink: #1a0807; --warn: #e3a64a; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -41,6 +41,20 @@ button:disabled { opacity: 0.5; cursor: default; }
 select.count { flex: 0 0 auto; width: auto; padding: 8px 10px; border-radius: 999px; }
 .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
+.bar.busy > i { width: 35% !important; animation: busy 1.2s ease-in-out infinite; }
+@keyframes busy { from { margin-left: -35%; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar.busy > i { animation: none; width: 100% !important; opacity: .5; } }
+.warn { color: var(--warn); font-size: 13px; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.filters button { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; font-size: 14px; padding: 6px 12px; }
+.filters button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
+.pager .where { display: flex; justify-content: center; flex: 1 1 auto; min-width: 0; }
+.pager select { flex: 0 1 auto; width: auto; max-width: 100%; min-width: 0; padding: 7px 10px; border-radius: 999px; font-size: 14px; }
+.pager button { flex: none; padding: 7px 12px; font-size: 14px; }
+.pager:empty { display: none; }
+.dl { margin-bottom: 12px; }
+.dl:empty { display: none; }
 .tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .back { background: none; color: var(--accent); padding: 0; margin: 12px 0 8px; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; max-width: calc(100% - 32px); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; }
@@ -80,9 +94,22 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
     <nav id="tabs"></nav>
 
     <section id="upnext" class="view hidden">
+      <div class="card dl" id="upnextDl"></div>
       <p class="muted" id="upnextNote"></p>
       <div id="upnextAll"></div>
+      <div class="filters" id="upnextFilters"></div>
+      <div class="pager" id="upnextPagerTop"></div>
       <div class="card" id="upnextList"></div>
+      <div class="pager" id="upnextPager"></div>
+    </section>
+
+    <section id="oncard" class="view hidden">
+      <p class="muted" id="oncardNote"></p>
+      <div class="filters" id="oncardFilters"></div>
+      <div class="tools" id="oncardTools" style="margin: 0 0 12px"></div>
+      <div class="pager" id="oncardPagerTop"></div>
+      <div class="card" id="oncardList"></div>
+      <div class="pager" id="oncardPager"></div>
     </section>
 
     <section id="podcasts" class="view hidden">
@@ -103,7 +130,10 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
 
     <section id="list" class="view hidden">
       <p class="muted" id="listNote"></p>
+      <div class="filters" id="listFilters"></div>
+      <div class="pager" id="listPagerTop"></div>
       <div class="card" id="listItems"></div>
+      <div class="pager" id="listPager"></div>
     </section>
 
     <section id="files" class="view hidden">
@@ -178,9 +208,13 @@ let listName = "";    // the open list's
 let current = null;   // the open show's key
 let account = {signedIn: false};
 let toastTimer = 0;
+let upPage = 0, upFilter = "";     // Up Next's page (from 0) and filter (PC_FILTERS)
+let listPage = 0, listFilter = ""; // the open list's
+let cardPage = 0, cardFilter = ""; // On the Q2's ("notremoved": Ads Not Removed)
+let nextPick = 0;                  // Download Next's count as picked here (0: the Q2's)
 
 const TABS = [
-  ["upnext", "Up Next", true], ["podcasts", "Podcasts", false], ["new", "New", true], ["inprog", "In Progress", true],
+  ["upnext", "Up Next", true], ["oncard", "On the Q2", false], ["podcasts", "Podcasts", false], ["new", "New", true], ["inprog", "In Progress", true],
   ["starred", "Starred", true], ["history", "History", true], ["files", "Files", true], ["discover", "Discover", false],
   ["settings", "Settings", false]];
 const LISTS = {new: "New Releases", inprog: "In Progress", starred: "Starred", history: "History"};
@@ -237,6 +271,7 @@ function day(iso) {
     ? {day: "numeric", month: "short"} : {day: "numeric", month: "short", year: "numeric"});
 }
 const join = (...p) => p.filter(Boolean).join(" · ");
+const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 
 function row(title, sub, opts = {}) {
   const r = el("div", "row" + (opts.onclick ? " tap" : ""));
@@ -251,9 +286,10 @@ function row(title, sub, opts = {}) {
   g.append(el("div", "title", title));
   if (sub) g.append(el("div", "sub", sub));
   if (opts.cut) g.append(el("div", "cut", opts.cut));
+  if (opts.warn) g.append(el("div", "warn", opts.warn));
   if (opts.progress !== undefined) {
-    const bar = el("div", "bar"), fill = el("i");
-    fill.style.width = Math.max(2, opts.progress) + "%";
+    const bar = el("div", opts.progress === "busy" ? "bar busy" : "bar"), fill = el("i");
+    if (opts.progress !== "busy") fill.style.width = Math.max(2, opts.progress) + "%";
     bar.append(fill);
     g.append(bar);
   }
@@ -271,6 +307,15 @@ function button(label, cls, fn) {
     try { await fn(); } catch (err) { toast(err.message); } finally { b.disabled = false; }
   };
   return b;
+}
+
+// progress is a download's bar: how far it has come; or a moving bar while it runs with its size
+// unknown, or once downloaded while it is checked for ads and cut (the user's, 2026-11-16: the Q2
+// showed an episode downloading and the phone page no bar)
+function progress(j) {
+  if (!j || j.state !== "active") return undefined;
+  if (j.note || !(j.size > 0)) return "busy";
+  return j.done * 100 / j.size;
 }
 
 function jobLine(j) {
@@ -293,6 +338,7 @@ function renderTabs() {
 }
 
 function openTab(id) {
+  if (id !== tab) { listPage = 0; listFilter = ""; }
   tab = id;
   current = null;
   listName = LISTS[id] ? id : "";
@@ -317,12 +363,11 @@ function pcLine(e) {
 }
 
 function pcRow(e) {
-  let pct;
-  if (e.job && e.job.state === "active" && e.job.size > 0) pct = e.job.done * 100 / e.job.size;
   const btns = [];
-  if (!e.onCard && !e.job) btns.push(button("Get", "quiet", () => act(e, "download")));
+  if (e.job && e.job.state === "failed") btns.push(button("Retry", "quiet", () => act(e, "download")));
+  else if (!e.onCard && !e.job) btns.push(button("Get", "quiet", () => act(e, "download")));
   btns.push(button(e.starred ? "★" : "☆", "icon", () => act(e, e.starred ? "unstar" : "star")));
-  return row(e.title, pcLine(e), {progress: pct, cut: e.cut, buttons: btns, onclick: () => sheet(e)});
+  return row(e.title, pcLine(e), {progress: progress(e.job), cut: e.cut, warn: e.notRemoved, buttons: btns, onclick: () => sheet(e)});
 }
 
 async function act(e, action) {
@@ -336,14 +381,18 @@ function sheet(e) {
   const p = $("sheetPanel");
   p.replaceChildren(el("div", "title", e.title), el("div", "sub", pcLine(e)));
   if (e.cut) p.append(el("div", "cut", e.cut));
+  if (e.notRemoved) p.append(el("div", "warn", e.notRemoved));
   const add = (label, cls, fn) => p.append(button(label, cls, fn));
+  // a failed download, fetched again on a press (the user's, 2026-11-16)
+  if (e.job && e.job.state === "failed") add("Download Again", "", () => act(e, "download"));
+  if (e.notRemoved && e.key) add("Remove Ads Again", "", () => redo(e.key, e.eid));
   if (e.upNext) add("Remove from Up Next", "quiet", () => act(e, "remove"));
   else { add("Play Next", "", () => act(e, "next")); add("Play Last", "quiet", () => act(e, "last")); }
   if (!e.onCard && !e.job) add("Download to the Q2", "quiet", () => act(e, "download"));
   add(e.starred ? "Take the Star Away" : "Star", "quiet", () => act(e, e.starred ? "unstar" : "star"));
   add(e.status === 3 ? "Mark Unplayed" : "Mark Played", "quiet", () => act(e, e.status === 3 ? "unplayed" : "played"));
   if (e.onCard && e.key) add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
-  if (e.onCard && e.key) add("Remove Ads Again", "quiet", () => redo(e.key, e.eid));
+  if (e.onCard && e.key && !e.notRemoved) add("Remove Ads Again", "quiet", () => redo(e.key, e.eid));
   add("Description", "quiet", () => notes(e));
   add("Close", "quiet", async () => closeSheet());
   $("sheet").classList.remove("hidden");
@@ -399,51 +448,174 @@ async function report(key, eid, title) {
   $("sheet").classList.remove("hidden");
 }
 
-function renderUpNext(d) {
-  const list = $("upnextList");
-  list.replaceChildren();
-  $("upnextNote").textContent = d.loading ? "Asking Pocket Casts…" : d.episodes.length + " episodes";
+// The filters over Up Next and the lists: each episode by its state on the Q2 (the user's,
+// 2026-11-16: Ads Not Removed found by a filter, fetched again later)
+const PC_FILTERS = [["", "All"], ["oncard", "On the Q2"], ["downloading", "Downloading"], ["failed", "Failed"],
+  ["notremoved", "Ads Not Removed"], ["notoncard", "Not on the Q2"]];
+
+function filters(box, list, current, pick) {
+  box.replaceChildren();
+  for (const [id, label] of list) {
+    const b = el("button", id === current ? "on" : "", label);
+    b.onclick = () => pick(id);
+    box.append(b);
+  }
+}
+
+// pager is a page's Previous and Next and a jump to any page (the user's, 2026-11-16: Up Next's
+// 1,372 episodes were cut at 200), left alone while its page list is open
+function pager(box, d, go) {
+  if (box.contains(document.activeElement) && document.activeElement.tagName === "SELECT") return;
+  box.replaceChildren();
+  if (!d.pages || d.pages < 2) return;
+  const prev = el("button", "quiet", "‹ Prev"), next = el("button", "quiet", "Next ›");
+  prev.disabled = d.page <= 0;
+  next.disabled = d.page >= d.pages - 1;
+  prev.onclick = () => go(d.page - 1);
+  next.onclick = () => go(d.page + 1);
+  const where = el("div", "where"), pick = el("select");
+  pick.setAttribute("aria-label", "Page");
+  for (let i = 0; i < d.pages; i++) {
+    const from = i * d.perPage + 1, to = Math.min((i + 1) * d.perPage, d.total);
+    const o = el("option", "", (i + 1) + " of " + d.pages + " · " + from + "–" + to);
+    o.value = i;
+    if (i === d.page) o.selected = true;
+    pick.append(o);
+  }
+  pick.onchange = () => go(Number(pick.value));
+  where.append(pick);
+  box.append(prev, where, next);
+}
+
+function pagers(top, bottom, d, go) {
+  const jump = n => { go(n); window.scrollTo(0, 0); refreshNow(); };
+  pager(top, d, jump);
+  pager(bottom, d, jump);
+}
+
+// renderDownloads is the top of Up Next: the download under way, with its bar, and how many wait
+// or failed, whichever page is open
+function renderDownloads(box, dl) {
+  box.replaceChildren();
+  if (!dl) return;
+  for (const j of dl.active || []) box.append(row(j.title, join(j.show, j.note ? j.note + "…" : jobLine(j)), {progress: progress(j)}));
+  const more = [dl.waiting ? dl.waiting + " waiting" : "", dl.failed ? dl.failed + " failed" : ""].filter(Boolean);
+  if (!more.length) return;
+  const btns = [];
+  if (dl.failed && upFilter !== "failed") btns.push(button("Show Failed", "quiet", async () => { upFilter = "failed"; upPage = 0; refreshNow(); }));
+  box.append(row(more.join(" · "), (dl.active || []).length ? "" : "Downloads", {buttons: btns}));
+}
+
+function renderUpNextTools(d) {
   const all = $("upnextAll");
+  if (all.contains(document.activeElement) && document.activeElement.tagName === "SELECT") return; // being picked
   all.replaceChildren();
-  if (!d.loading && d.episodes.length) all.append(button(d.downloadingAll ? "Stop Downloading All" : "Download All", "quiet", async () => {
+  if (d.loading || !d.all) return;
+  all.append(button(d.downloadingAll ? "Stop Downloading All" : "Download All", "quiet", async () => {
     if (!d.downloadingAll && !confirm("Download every episode in Up Next that isn't on the Q2 yet?")) return;
     toast((await api("pc/downloadall", {})).message);
     refresh();
   }));
   // Download Next (the user's, 2026-11-15): the next few of Up Next not on the Q2 yet, after those it keeps downloaded
-  if (!d.loading && d.episodes.length && d.nextLeft > 0) all.append(button("Stop Downloading the Next " + d.nextLeft, "quiet", async () => {
-    toast((await api("pc/downloadnext", {count: 0})).message);
-    refresh();
-  }));
-  else if (!d.loading && d.episodes.length) {
-    const pick = el("select", "count");
-    pick.setAttribute("aria-label", "How many to download next");
-    for (const n of d.nextChoices || [1, 3, 5, 10, 20]) {
-      const o = el("option", "", String(n));
-      o.value = n;
-      if (n === d.nextCount) o.selected = true;
-      pick.append(o);
-    }
-    pick.onclick = e => e.stopPropagation();
-    const next = button("Download Next", "quiet", async () => {
-      toast((await api("pc/downloadnext", {count: Number(pick.value)})).message);
+  if (d.nextLeft > 0) {
+    all.append(button("Stop Downloading the Next " + d.nextLeft, "quiet", async () => {
+      toast((await api("pc/downloadnext", {count: 0})).message);
       refresh();
-    });
-    const group = el("span", "group"); // the count beside its button, wrapping with it
-    group.append(next, pick);
-    all.append(group);
+    }));
+    return;
   }
-  if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Up Next is empty."));
-  for (const e of d.episodes.slice(0, 200)) list.append(pcRow(e));
-  if (d.episodes.length > 200) list.append(el("div", "empty", "…and " + (d.episodes.length - 200) + " more"));
+  const pick = el("select", "count");
+  pick.setAttribute("aria-label", "How many to download next");
+  const want = nextPick || d.nextCount; // the pick kept as the page refreshes (it went back to 5 at each)
+  for (const n of d.nextChoices || [1, 3, 5, 10, 20]) {
+    const o = el("option", "", String(n));
+    o.value = n;
+    if (n === want) o.selected = true;
+    pick.append(o);
+  }
+  pick.onclick = e => e.stopPropagation();
+  pick.onchange = () => {
+    nextPick = Number(pick.value);
+    api("pc/settings", {nextCount: nextPick}).catch(() => {}); // the Q2's row says it too
+  };
+  const next = button("Download Next", "quiet", async () => {
+    nextPick = Number(pick.value);
+    toast((await api("pc/downloadnext", {count: nextPick})).message);
+    refresh();
+  });
+  const group = el("span", "group"); // the count beside its button, wrapping with it
+  group.append(next, pick);
+  all.append(group);
+}
+
+function renderUpNext(d) {
+  upPage = d.page || 0;
+  renderDownloads($("upnextDl"), d.downloads);
+  $("upnextNote").textContent = d.loading ? "Asking Pocket Casts…" : upFilter ? d.total + " of " + plural(d.all, "episode") : plural(d.all, "episode");
+  renderUpNextTools(d);
+  if (d.loading || !d.all) $("upnextFilters").replaceChildren();
+  else filters($("upnextFilters"), PC_FILTERS, upFilter, f => { upFilter = f; upPage = 0; refreshNow(); });
+  pagers($("upnextPagerTop"), $("upnextPager"), d, n => { upPage = n; });
+  const list = $("upnextList");
+  list.replaceChildren();
+  if (!d.loading && !d.episodes.length) list.append(el("div", "empty", d.all ? "None of Up Next is here." : "Up Next is empty."));
+  for (const e of d.episodes) list.append(pcRow(e));
 }
 
 function renderList(d) {
+  listPage = d.page || 0;
   const list = $("listItems");
   list.replaceChildren();
-  $("listNote").textContent = d.error ? d.error : d.loading ? "Asking Pocket Casts…" : "";
+  $("listNote").textContent = d.error ? d.error : d.loading ? "Asking Pocket Casts…" : listFilter ? d.total + " of " + plural(d.all, "episode") : "";
+  if (d.loading || !d.all) $("listFilters").replaceChildren();
+  else filters($("listFilters"), PC_FILTERS, listFilter, f => { listFilter = f; listPage = 0; refreshNow(); });
+  pagers($("listPagerTop"), $("listPager"), d, n => { listPage = n; });
   if (!d.loading && !d.episodes.length) list.append(el("div", "empty", "Nothing here."));
   for (const e of d.episodes) list.append(pcRow(e));
+}
+
+// On the Q2: every episode downloaded, newest first; Ads Not Removed is those that went on without
+// their ads removed (too little memory to check them, or Pocket crashed checking them), each fetched
+// again and checked by Remove Ads Again, one or all
+function renderOnCard(d) {
+  cardPage = d.page || 0;
+  $("oncardNote").textContent = join(plural(d.all, "episode") + " on the Q2", d.notRemoved ? d.notRemoved + " with their ads still in" : "");
+  filters($("oncardFilters"), [["", "All"], ["notremoved", "Ads Not Removed (" + d.notRemoved + ")"]], cardFilter,
+    f => { cardFilter = f; cardPage = 0; refreshNow(); });
+  const tools = $("oncardTools");
+  tools.replaceChildren();
+  if (cardFilter === "notremoved" && d.total) tools.append(button("Remove Ads Again for All " + d.total, "", async () => {
+    if (!confirm("Download these " + d.total + " episodes again and remove their ads? Each plays as it is until its new copy is ready.")) return;
+    toast((await api("redoall", {})).message);
+    refresh();
+  }));
+  pagers($("oncardPagerTop"), $("oncardPager"), d, n => { cardPage = n; });
+  const list = $("oncardList");
+  list.replaceChildren();
+  if (!d.episodes.length) list.append(el("div", "empty", cardFilter ? "Every episode on the Q2 had its ads removed." : "Nothing on the Q2 yet."));
+  for (const e of d.episodes) {
+    const sub = join(e.show, day(e.date), length(e.duration), size(e.size), e.job ? (e.job.note || jobLine(e.job)) : "");
+    list.append(row(e.title, sub, {progress: progress(e.job), cut: e.cut, warn: e.notRemoved, onclick: () => cardSheet(e)}));
+  }
+}
+
+function cardSheet(e) {
+  const p = $("sheetPanel");
+  p.replaceChildren(el("div", "title", e.title), el("div", "sub", join(e.show, day(e.date), length(e.duration), size(e.size))));
+  if (e.cut) p.append(el("div", "cut", e.cut));
+  if (e.notRemoved) p.append(el("div", "warn", e.notRemoved));
+  const add = (label, cls, fn) => p.append(button(label, cls, fn));
+  add("Remove Ads Again", e.notRemoved ? "" : "quiet", () => redo(e.key, e.eid));
+  add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
+  if (e.pc && e.uuid) add("Description", "quiet", () => notes({podcast: e.pc, uuid: e.uuid, title: e.title, show: e.show, published: e.date, duration: e.duration}));
+  add("Delete from the Q2", "bad", async () => {
+    if (!confirm("Delete “" + e.title + "” from the Q2?")) return;
+    await api("delete", {key: e.key, eid: e.eid});
+    closeSheet();
+    refresh();
+  });
+  add("Close", "quiet", async () => closeSheet());
+  $("sheet").classList.remove("hidden");
 }
 
 function renderFiles(d) {
@@ -558,12 +730,12 @@ function renderPodcasts(s) {
   jobs.replaceChildren();
   $("downloads").classList.toggle("hidden", !s.jobs.length);
   for (const j of s.jobs) {
-    const pct = j.state === "active" && j.size > 0 ? j.done * 100 / j.size : undefined;
-    jobs.append(row(j.title, join(j.show, j.note || jobLine(j)), {progress: pct, buttons: [
+    jobs.append(row(j.title, join(j.show, j.note || jobLine(j)), {progress: progress(j), buttons: [
       j.state === "failed"
         ? button("Retry", "quiet", () => api("download", {key: j.key, eid: j.eid}).then(refresh))
         : button("Cancel", "quiet", () => api("cancel", {key: j.key, eid: j.eid}).then(refresh))]}));
   }
+  if (s.jobsMore > 0) jobs.append(el("div", "empty", "…and " + s.jobsMore + " more waiting"));
   const list = $("showsList");
   list.replaceChildren();
   if (!s.shows.length) list.append(el("div", "empty", "No shows yet. Search above, paste a feed's address, import OPML, or sign in to Pocket Casts in Settings."));
@@ -594,7 +766,7 @@ function renderShow(d) {
       sub = join(when, "on the Q2", size(e.size));
       if (e.job) { // Remove Ads Again under way
         sub = join(when, "on the Q2", e.job.note || jobLine(e.job));
-        if (e.job.state === "active" && e.job.size > 0) pct = e.job.done * 100 / e.job.size;
+        pct = progress(e.job);
       }
       btn = button("Delete", "bad", async () => {
         if (!confirm("Delete “" + e.title + "” from the Q2?")) return;
@@ -602,7 +774,7 @@ function renderShow(d) {
       });
     } else if (e.job) {
       sub = join(when, e.job.note || jobLine(e.job));
-      if (e.job.state === "active" && e.job.size > 0) pct = e.job.done * 100 / e.job.size;
+      pct = progress(e.job);
       btn = e.job.state === "failed"
         ? button("Retry", "quiet", () => api("download", id).then(refresh))
         : button("Cancel", "quiet", () => api("cancel", id).then(refresh));
@@ -610,7 +782,7 @@ function renderShow(d) {
       sub = join(when, size(e.length));
       btn = button("Download", "", async () => { toast((await api("download", id)).message); refresh(); });
     }
-    const opts = {progress: pct, cut: e.cut, buttons: [btn]};
+    const opts = {progress: pct, cut: e.cut, warn: e.notRemoved, buttons: [btn]};
     if (e.onCard) opts.onclick = () => report(sh.key, e.eid, e.title);
     else if (e.pc && e.uuid) opts.onclick = () => notes({podcast: e.pc, uuid: e.uuid, title: e.title, show: sh.title, published: e.date, duration: e.duration});
     if (account.signedIn && e.pc && e.uuid) {
@@ -707,22 +879,28 @@ async function loadAccount() {
   renderTabs();
 }
 
-let busy = false;
+let busy = false, again = false;
 async function refresh() {
-  if (busy || !$("sheet").classList.contains("hidden")) return;
+  if (!$("sheet").classList.contains("hidden")) return;
+  if (busy) { again = true; return; } // a page or filter picked meanwhile: once this one is in
   busy = true;
   try {
     if (current) renderShow(await api("show?key=" + encodeURIComponent(current)));
-    else if (tab === "upnext") renderUpNext(await api("pc/upnext"));
-    else if (listName) renderList(await api("pc/list?name=" + listName));
+    else if (tab === "upnext") renderUpNext(await api("pc/upnext?page=" + upPage + "&filter=" + upFilter));
+    else if (tab === "oncard") renderOnCard(await api("oncard?page=" + cardPage + "&filter=" + cardFilter));
+    else if (listName) renderList(await api("pc/list?name=" + listName + "&page=" + listPage + "&filter=" + listFilter));
     else if (tab === "podcasts") renderPodcasts(await api("state"));
     else if (tab === "files") renderFiles(await api("pc/files"));
     else if (tab === "discover") await renderDiscover();
     else if (tab === "settings") await renderSettings();
   } catch (err) {
     if (current && /isn't subscribed/.test(err.message)) openTab("podcasts");
-  } finally { busy = false; }
+  } finally {
+    busy = false;
+    if (again) { again = false; refresh(); }
+  }
 }
+function refreshNow() { refresh(); }
 
 async function boot() {
   await loadAccount();
@@ -737,7 +915,9 @@ async function boot() {
   setInterval(() => {
     if (document.hidden || $("app").classList.contains("hidden")) return;
     if (++n % 4 === 0) loadAccount().catch(() => {});
-    if (tab !== "discover" && tab !== "settings" || current) refresh();
+    if (tab === "discover" || tab === "settings") return;
+    if ((tab === "podcasts" || tab === "oncard") && !current && n % 2) return; // the card read less often
+    refresh();
   }, 2500);
 })();
 </script>

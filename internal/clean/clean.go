@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"q2-pocket/internal/adfree"
 	"q2-pocket/internal/mp3"
@@ -73,7 +74,8 @@ type Cleaner struct {
 
 type notesAt struct {
 	at time.Time
-	n  map[string]pocketcasts.Notes
+	n  pocketcasts.Notes
+	ok bool
 }
 
 // Cut is seconds [From, To) of the episode as downloaded, and what it was.
@@ -90,7 +92,10 @@ type Report struct {
 	Length  float64   `json:"length"` // seconds, as downloaded
 	Cuts    []Cut     `json:"cuts,omitempty"`
 	Note    string    `json:"note,omitempty"` // why it wasn't checked, or what didn't work
-	Sources []string  `json:"sources,omitempty"`
+	// Unchecked: its ads weren't removed (too little memory to check it, Pocket crashed checking
+	// it, its cut copy couldn't be written): listed as Ads Not Removed, for a Remove Ads Again
+	Unchecked bool     `json:"unchecked,omitempty"`
+	Sources   []string `json:"sources,omitempty"`
 }
 
 // Edit is the frames to leave out of the download, and the stream they are of; and the chapters its
@@ -118,18 +123,48 @@ func (c *Cleaner) logf(format string, args ...any) {
 	}
 }
 
-// memoryFor is about the memory a check for ads of an MP3 of n frames takes besides what the app has:
-// its frames (24 bytes each), their hashes, another episode's and the matching's tables, about 52
-// bytes a frame in all (measured on a four-hour episode at 128 kbps: 551,000 frames, 230 MB, about
-// 29 MB). By its frames, not its bytes (the user's, 2026-11-16: Huberman Lab's 2 h 50 at 320 kbps,
-// 409 MB, read as 51 MB by its size, is 391,000 frames, about 21 MB; it was left as it came, its
-// ads and sponsor reads in, and Remove Ads Again left it so again).
-func memoryFor(frames int) int64 { return int64(frames)*56 + slack }
+// The memory a check for ads takes on top of what the app holds, measured on a 32-bit build like
+// the Q2's (adfree's TestCheckMemory: a three-hour episode, a full library of adverts, three-hour
+// episodes to compare with, about 18 MB in all): the episode's frames (mp3.Frame each), its hashes
+// and a second copy's and their indexes (about 10 bytes a frame), the library of adverts and its
+// index (one and a half times its file), and the longest episode compared with and its index (6
+// bytes a frame, one at a time). The user's rule (2026-11-16): every check is a whole one, every
+// source of evidence used, or there is none and the episode is marked Ads Not Removed for a Remove
+// Ads Again later; never a part of one.
+const (
+	perFrame = int64(unsafe.Sizeof(mp3.Frame{})) + 10
+	perPeer  = 6       // bytes a frame of an episode compared with
+	slack    = 2 << 20 // the check's own besides its tables
+	reserve  = 6 << 20 // left to the Q2 itself while an episode is checked
+)
 
-// scanFor is what reading its frames alone takes, on which the sponsor reads are cut.
-func scanFor(frames int) int64 { return int64(frames)*24 + slack }
+// memoryWait is how long a check waits for memory to be handed back (the app's other work waits
+// for it, Exclusive) before the episode goes on without one; tests shorten it.
+var memoryWait = 30 * time.Second
 
-const slack = 1 << 20 // the check's own besides its tables
+// need is about the memory checking an episode of frames for ads takes, its peers' biggest file
+// (bytes) and the library's given.
+func need(frames int, libBytes, peerBytes int64) int64 {
+	return int64(frames)*perFrame + libBytes*3/2 + peerBytes/4*perPeer + slack
+}
+
+// exclusive is held while an episode is checked for ads, and around the app's other big work (a
+// sync's lists, a feed read: Exclusive), so they never want memory at the same moment and the check
+// has what it measured free.
+var exclusive sync.Mutex
+
+// Exclusive waits until no episode is being checked for ads and holds off the next check until
+// the func it gives back is called. Nothing done while holding it may call Clean.
+func Exclusive() func() {
+	exclusive.Lock()
+	return exclusive.Unlock
+}
+
+// Unchecked marks an episode's report as not checked for ads, why its note: it is listed as Ads
+// Not Removed until a Remove Ads Again checks it.
+func (c *Cleaner) Unchecked(e Episode, why string) {
+	c.save(e, &Report{Checked: time.Now(), Note: why, Unchecked: true})
+}
 
 func (c *Cleaner) path(kind, key, eid, ext string) string {
 	return filepath.Join(c.Dir, kind, key+"-"+eid+ext)
@@ -149,21 +184,33 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		return nil, nil
 	}
 	note("Checking for ads")
-	noAds := false // too little memory free for the ad check: the sponsor reads alone
-	if frames := mp3.FramesIn(part); frames > 0 && c.Free != nil {
-		if free := c.Free(); free >= 0 && free < scanFor(frames) {
-			c.logf("%q: %d frames, too many to read in the %d MB of memory free: left as it came", e.Title,
-				frames, free>>20)
-			rep.Note = "Too long to check in the Q2's free memory: left as it came"
-			c.save(e, rep)
+	frames := mp3.FramesIn(part)
+	peers, peerBytes := c.peers(e)
+	libPath := filepath.Join(c.Dir, "ads.bin")
+	var libBytes int64
+	if fi, err := os.Stat(libPath); err == nil {
+		libBytes = fi.Size()
+	}
+	done := Exclusive()
+	defer done()
+	if want := need(frames, libBytes, peerBytes) + reserve; frames > 0 && c.Free != nil && set.Ads {
+		free := c.Free()
+		for start := time.Now(); free >= 0 && free < want && time.Since(start) < memoryWait; free = c.Free() {
+			note("Waiting for memory to check for ads")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+		if free >= 0 && free < want {
+			c.logf("%q: %d frames, %d MB needed to check for ads, %d MB free: not checked", e.Title,
+				frames, want>>20, free>>20)
+			c.Unchecked(e, fmt.Sprintf("Ads not removed: the Q2 had %d MB of memory free, the check needs %d MB", free>>20, want>>20))
 			c.uncutTranscript(ctx, e)
 			return nil, nil
-		} else if free >= 0 && free < memoryFor(frames) && set.Ads {
-			c.logf("%q: %d frames, too many to check for ads in the %d MB of memory free: sponsor reads only",
-				e.Title, frames, free>>20)
-			noAds = true
-			rep.Sources = append(rep.Sources, "ads not checked: too little of the Q2's memory free")
 		}
+		c.logf("%q: %d frames, %d MB needed to check for ads, %d MB free", e.Title, frames, want>>20, free>>20)
 	}
 	s, err := mp3.ScanFile(part)
 	if err != nil {
@@ -179,7 +226,7 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	rep.Sources = append(rep.Sources, src.used...)
 
 	var dai []adfree.Cut
-	if set.Ads && !noAds {
+	if set.Ads {
 		ev := adfree.Evidence{Opens: src.opens, Now: time.Now()}
 		if e.Duration > 0 {
 			ev.Budget = float64(e.Duration)
@@ -199,16 +246,14 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 			return nil, ctx.Err()
 		}
 		note("Checking for ads")
-		ev.Peers = c.peers(e)
-		lib := adfree.LoadLibrary(filepath.Join(c.Dir, "ads.bin"))
+		ev.Peers = peers
+		lib := adfree.LoadLibrary(libPath)
 		ev.Lib = lib
 		c.logf("%q: comparing with %d other episodes, a second copy: %v", e.Title, len(ev.Peers), ev.Copy != nil)
 		res := adfree.Detect(s, ev)
 		c.logf("%q: %d ads found in %d parts", e.Title, len(res.Cuts), res.Parts)
 		dai = res.Cuts
-		for _, h := range res.Learn {
-			lib.Add(h, ev.Now)
-		}
+		lib.Learn(res.Learn, ev.Now)
 		lib.Save()
 	}
 
@@ -466,7 +511,7 @@ func (c *Cleaner) keepNotes(ctx context.Context, e Episode) {
 	if e.Path == "" || e.Podcast == "" || e.UUID == "" || c.PC == nil {
 		return
 	}
-	n, ok := c.showNotes(ctx, e.Podcast)[e.UUID]
+	n, ok := c.episodeNotes(ctx, e.Podcast, e.UUID)
 	if !ok || strings.TrimSpace(n.Text) == "" {
 		return
 	}
@@ -527,6 +572,9 @@ func (c *Cleaner) Uncut(e Episode, why string) {
 	r := Load(c.Dir, e.Key, e.EID)
 	if r == nil {
 		r = &Report{Checked: time.Now()}
+	}
+	if len(r.Cuts) > 0 { // found and left in: not removed
+		r.Unchecked = true
 	}
 	r.Cuts, r.Note = nil, why
 	c.save(e, r)
@@ -699,11 +747,12 @@ func plural(n int, s string) string {
 }
 
 // peers is other episodes' frames: the show's latest and others', the newest first.
-func (c *Cleaner) peers(e Episode) []func() []uint64 {
+func (c *Cleaner) peers(e Episode) (out []func() []uint32, biggest int64) {
 	ents, _ := os.ReadDir(filepath.Join(c.Dir, "frames"))
 	type f struct {
 		name string
 		at   time.Time
+		size int64
 	}
 	var all []f
 	for _, d := range ents {
@@ -711,11 +760,10 @@ func (c *Cleaner) peers(e Episode) []func() []uint64 {
 			continue
 		}
 		if fi, err := d.Info(); err == nil {
-			all = append(all, f{d.Name(), fi.ModTime()})
+			all = append(all, f{d.Name(), fi.ModTime(), fi.Size()})
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].at.After(all[j].at) })
-	var out []func() []uint64
 	same, other := 0, 0
 	for _, x := range all {
 		mine := strings.HasPrefix(x.name, e.Key+"-")
@@ -728,12 +776,13 @@ func (c *Cleaner) peers(e Episode) []func() []uint64 {
 			other++
 		}
 		path := filepath.Join(c.Dir, "frames", x.name)
-		out = append(out, func() []uint64 {
+		out = append(out, func() []uint32 {
 			h, _ := adfree.LoadHashes(path) // nil if it can't be read: passed over
 			return h
 		})
+		biggest = max(biggest, x.size)
 	}
-	return out
+	return out, biggest
 }
 
 // prune keeps the newest framesKept episodes' frames.
@@ -763,7 +812,7 @@ var errSame = errors.New("the server sent the same adverts")
 
 // second fetches another copy of the episode when the server would send one with other adverts,
 // which its size tells first (a request for one byte): its frames' folded hashes, or nil.
-func (c *Cleaner) second(ctx context.Context, u string, size int64) ([]uint64, error) {
+func (c *Cleaner) second(ctx context.Context, u string, size int64) ([]uint32, error) {
 	for _, agent := range []string{c.Agent + " (second copy)", c.Agent + " (third copy)"} {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
@@ -804,15 +853,15 @@ func (c *Cleaner) second(ctx context.Context, u string, size int64) ([]uint64, e
 	return nil, nil
 }
 
-func scanCopy(resp *http.Response) ([]uint64, error) {
+func scanCopy(resp *http.Response) ([]uint32, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("the server answered HTTP %d", resp.StatusCode)
 	}
-	h, err := mp3.ScanHashes(resp.Body)
+	h, err := mp3.ScanHashes(resp.Body, resp.ContentLength)
 	if err != nil {
 		return nil, errors.New("it wasn't an MP3")
 	}
-	return h, nil
+	return adfree.FoldAll(h), nil
 }
 
 // found is what an episode has to look in for sponsor reads.
@@ -844,7 +893,7 @@ func (c *Cleaner) sources(ctx context.Context, e Episode) found {
 		tr = append(tr, pocketcasts.Transcript{URL: e.Transcript, Type: e.TranscriptType})
 	}
 	if e.Podcast != "" && e.UUID != "" && c.PC != nil {
-		if n, ok := c.showNotes(ctx, e.Podcast)[e.UUID]; ok {
+		if n, ok := c.episodeNotes(ctx, e.Podcast, e.UUID); ok {
 			tr = append(tr, n.Transcripts...)
 			tr = append(tr, n.Generated...)
 			if f.chapters == "" {
@@ -879,21 +928,29 @@ func (c *Cleaner) sources(ctx context.Context, e Episode) found {
 	return f
 }
 
-func (c *Cleaner) showNotes(ctx context.Context, podcast string) map[string]pocketcasts.Notes {
-	if n, ok := c.notes[podcast]; ok && time.Since(n.at) < notesFor {
-		return n.n
+// episodeNotes is an episode's show notes, kept a while for the check's second look; only the
+// episode's own are read (pocketcasts.EpisodeNotes), and those kept go once old.
+func (c *Cleaner) episodeNotes(ctx context.Context, podcast, uuid string) (pocketcasts.Notes, bool) {
+	id := podcast + ":" + uuid
+	if n, ok := c.notes[id]; ok && time.Since(n.at) < notesFor {
+		return n.n, n.ok
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	n, err := c.PC.ShowNotes(ctx, podcast)
+	n, ok, err := c.PC.EpisodeNotes(ctx, podcast, uuid)
 	if err != nil {
-		return nil
+		return n, false
+	}
+	for k, v := range c.notes {
+		if time.Since(v.at) >= notesFor {
+			delete(c.notes, k)
+		}
 	}
 	if c.notes == nil {
 		c.notes = map[string]notesAt{}
 	}
-	c.notes[podcast] = notesAt{time.Now(), n}
-	return n
+	c.notes[id] = notesAt{time.Now(), n, ok}
+	return n, ok
 }
 
 // sponsors is the sponsor reads found, in seconds of the download: SponsorBlock's for the episode's

@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"q2-pocket/internal/clean"
+	"q2-pocket/internal/library"
 	"q2-pocket/internal/pocketcasts"
 	"q2-pocket/internal/sponsor"
 )
@@ -19,7 +23,8 @@ import (
 //	POST login {email, password} signs in (the password goes to Pocket Casts, never to the card)
 //	POST logout, sync
 //	GET  settings; POST settings {…}  the cleaning's and Up Next's settings; keys are write-only
-//	GET  upnext; GET list?name=inprog|new|starred|history
+//	GET  upnext?page=&filter=; GET list?name=inprog|new|starred|history&page=&filter=
+//	     (a page of perPage; filter: oncard, notoncard, downloading, failed, notremoved)
 //	POST episode {podcast, uuid, action: next|last|remove|star|unstar|played|unplayed|download}
 //	GET  files; POST file {uuid, action: download|delete}
 //	GET  discover?name=; POST discover {uuid}
@@ -41,22 +46,27 @@ type pcEpisodeJSON struct {
 	OnCard     bool      `json:"onCard"`
 	Job        *jobJSON  `json:"job,omitempty"`
 	Cut        string    `json:"cut,omitempty"`
+	NotRemoved string    `json:"notRemoved,omitempty"` // on the Q2 with its ads: why (Ads Not Removed)
 	UpNext     bool      `json:"upNext"`
 }
 
+// pcEpisodes is a page of the account's episodes as the phone page shows them, the library looked
+// up once for the page (each show's folder read once) and only the page's reports read.
 func (w *web) pcEpisodes(eps []pocketcasts.Episode) []pcEpisodeJSON {
 	a := w.a
 	up, _ := a.sy.upNext()
-	in := map[string]bool{}
+	in := make(map[string]bool, len(up))
 	for _, e := range up {
 		in[e.UUID] = true
 	}
+	found, ok := a.lib.PCEpisodes(pcIDs(eps))
+	var not map[string]string
 	out := make([]pcEpisodeJSON, 0, len(eps))
-	for _, e := range eps {
+	for i, e := range eps {
 		j := pcEpisodeJSON{Podcast: e.Show(), UUID: e.UUID, Title: e.Title, Show: cmpOr(a.sy.title(e.Show()), e.PodcastTitle),
 			Published: e.Date(), Duration: int(e.Duration), PlayedUpTo: int(e.PlayedUpTo), Status: int(e.Status),
 			Starred: e.Starred, UpNext: in[e.UUID]}
-		if ep, err := a.lib.PCEpisode(e.Show(), e.UUID); err == nil {
+		if ep := found[i]; ok[i] {
 			j.Key, j.EID, j.OnCard = ep.Key, ep.EID, ep.OnCard
 			if j.Duration == 0 {
 				j.Duration = ep.Duration
@@ -66,16 +76,92 @@ func (w *web) pcEpisodes(eps []pocketcasts.Episode) []pcEpisodeJSON {
 				j.Job = &jj
 			}
 			if ep.OnCard {
-				if r := clean.Load(a.opts.dir, ep.Key, ep.EID); r != nil {
-					if ads, sp, _ := r.Removed(); ads+sp > 0 {
-						j.Cut = r.Summary()
-					}
+				r := clean.Load(a.opts.dir, ep.Key, ep.EID)
+				if ads, sp, _ := r.Removed(); ads+sp > 0 {
+					j.Cut = r.Summary()
 				}
+				if not == nil {
+					not = a.onCard().not
+				}
+				j.NotRemoved = not[ep.Key+":"+ep.EID]
 			}
 		}
 		out = append(out, j)
 	}
 	return out
+}
+
+// perPage is the episodes a page of the phone page's lists holds (the user's, 2026-11-16: Up Next's
+// 1,372 were cut at 200, and each look at it read every one's state off the card).
+const perPage = 50
+
+// pageOf is page (from 0, clamped) of n items: its bounds, and how many pages there are.
+func pageOf(n, page int) (from, to, at, pages int) {
+	pages = max(1, (n+perPage-1)/perPage)
+	at = min(max(page, 0), pages-1)
+	from = at * perPage
+	return from, min(from+perPage, n), at, pages
+}
+
+// The phone page's filters of a list of the account's episodes: each by its state on the Q2.
+var pcFilters = map[string]func(ep library.EpisodeInfo, found bool, not map[string]string) bool{
+	"oncard":    func(ep library.EpisodeInfo, found bool, _ map[string]string) bool { return found && ep.OnCard },
+	"notoncard": func(ep library.EpisodeInfo, found bool, _ map[string]string) bool { return !found || !ep.OnCard },
+	"downloading": func(ep library.EpisodeInfo, found bool, _ map[string]string) bool {
+		return found && ep.Job != nil && ep.Job.State != library.Failed
+	},
+	"failed": func(ep library.EpisodeInfo, found bool, _ map[string]string) bool {
+		return found && ep.Job != nil && ep.Job.State == library.Failed
+	},
+	"notremoved": func(ep library.EpisodeInfo, found bool, not map[string]string) bool {
+		_, still := not[ep.Key+":"+ep.EID]
+		return found && ep.OnCard && still
+	},
+}
+
+// filtered is eps in filter (pcFilters; "" or unknown: all of them).
+func (w *web) filtered(eps []pocketcasts.Episode, filter string) []pocketcasts.Episode {
+	keep, ok := pcFilters[filter]
+	if !ok {
+		return eps
+	}
+	found, has := w.a.lib.PCEpisodes(pcIDs(eps))
+	not := w.a.onCard().not
+	var out []pocketcasts.Episode
+	for i, e := range eps {
+		if keep(found[i], has[i], not) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// pcPageJSON is a page of a list of the account's episodes: filtered, then paged.
+func (w *web) pcPageJSON(eps []pocketcasts.Episode, q url.Values) map[string]any {
+	all := len(eps)
+	eps = w.filtered(eps, q.Get("filter"))
+	page, _ := strconv.Atoi(q.Get("page"))
+	from, to, at, pages := pageOf(len(eps), page)
+	return map[string]any{"episodes": w.pcEpisodes(eps[from:to]), "total": len(eps), "all": all, "page": at,
+		"pages": pages, "perPage": perPage, "from": from}
+}
+
+// downloading is what the downloads are doing, for the top of the phone page's Up Next: the one
+// under way (with its progress, or what it is doing once downloaded) and how many wait or failed.
+func (w *web) downloading() map[string]any {
+	var active []jobJSON
+	waiting, failed := 0, 0
+	for _, j := range w.a.lib.DL.Jobs() {
+		switch j.State {
+		case library.Active:
+			active = append(active, jobOut(j))
+		case library.Failed:
+			failed++
+		default:
+			waiting++
+		}
+	}
+	return map[string]any{"active": active, "waiting": waiting, "failed": failed}
 }
 
 type pcBody struct {
@@ -86,7 +172,8 @@ type pcBody struct {
 
 	Ads, Sponsors, SelfPromo, Copy, DeletePlayed, TwoWay *bool
 	UpNext                                               *int
-	Count                                                int // Download Next's (0: stop)
+	NextCount                                            *int // Download Next's count, chosen on the page
+	Count                                                int  // Download Next's (0: stop)
 	YouTubeKey, SpotifyID, SpotifySecret                 *string
 }
 
@@ -148,7 +235,10 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 					*p = *v
 				}
 			}
-			set(&s.DeletePlayed, body.DeletePlayed) // ad removal is always on: its switches are no more
+			set(&s.DeletePlayed, body.DeletePlayed)                                     // ad removal is always on: its switches are no more
+			if body.NextCount != nil && slices.Contains(nextChoices, *body.NextCount) { // Download Next's count, chosen
+				s.NextCount = *body.NextCount
+			}
 			set(&s.TwoWay, body.TwoWay)
 			if body.UpNext != nil {
 				s.UpNext = min(max(*body.UpNext, -1), 10000)
@@ -175,9 +265,10 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 		if at.IsZero() && a.pc.SignedIn() {
 			a.sy.kick()
 		}
-		reply(rw, http.StatusOK, map[string]any{"loading": at.IsZero(), "episodes": w.pcEpisodes(up),
-			"downloadingAll": a.sy.allPending(), "nextLeft": a.sy.nextPending(), "nextCount": a.settings().nextCount(),
-			"nextChoices": nextChoices})
+		out := w.pcPageJSON(up, r.URL.Query())
+		out["loading"], out["downloadingAll"], out["nextLeft"] = at.IsZero(), a.sy.allPending(), a.sy.nextPending()
+		out["nextCount"], out["nextChoices"], out["downloads"] = a.settings().nextCount(), nextChoices, w.downloading()
+		reply(rw, http.StatusOK, out)
 	case route == "downloadnext" && post: // Up Next's Download Next, as the Q2's: count, or 0 to stop
 		if body.Count <= 0 {
 			a.sy.setNext(0)
@@ -209,7 +300,8 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 			return
 		}
 		eps, err, loading := a.sy.list(name)
-		out := map[string]any{"loading": loading || eps == nil && err == nil, "episodes": w.pcEpisodes(eps)}
+		out := w.pcPageJSON(eps, r.URL.Query())
+		out["loading"] = loading || eps == nil && err == nil
 		if err != nil {
 			out["error"] = say(err)
 		}
@@ -264,12 +356,11 @@ func (w *web) pc(rw http.ResponseWriter, r *http.Request, route string, post boo
 		reply(rw, http.StatusOK, map[string]string{"message": res.Message})
 	case route == "notes" && !post:
 		q := r.URL.Query()
-		notes, err := a.pc.ShowNotes(ctx, q.Get("podcast"))
+		n, _, err := a.pc.EpisodeNotes(ctx, q.Get("podcast"), q.Get("uuid"))
 		if err != nil {
 			fail(errors.New("can't reach Pocket Casts"))
 			return
 		}
-		n := notes[q.Get("uuid")]
 		out := map[string]any{"text": clean.NotesText(n.Text), "link": n.Link}
 		if n.ChaptersURL != "" {
 			if b, err := a.pc.Get(ctx, n.ChaptersURL, 1<<20); err == nil {

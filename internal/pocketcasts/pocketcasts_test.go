@@ -195,3 +195,46 @@ func TestFlex(t *testing.T) {
 	}
 	_ = io.EOF
 }
+
+// EpisodeNotes reads a show's notes as they come and keeps the one episode's: plain, gzipped as
+// said, and gzipped without saying (the cache's files).
+func TestEpisodeNotes(t *testing.T) {
+	doc := `{"podcast":{"uuid":"p1","title":"Show","episodes":[` +
+		`{"uuid":"e1","show_notes":"<p>one</p>","chapters":[{"start":1}]},` +
+		`{"uuid":"e2","show_notes":"<p>two</p>","chapters_url":"https://x/c.json","pocket_casts_transcripts":[{"url":"https://x/t.vtt","type":"text/vtt"}]},` +
+		`{"uuid":"e3","show_notes":"three"}]},"extra":[1,2]}`
+	var zipped bytes.Buffer
+	zw := gzip.NewWriter(&zipped)
+	zw.Write([]byte(doc))
+	zw.Close()
+	for _, mode := range []string{"plain", "said", "unsaid"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/cache/mobile/show_notes/full/p1" {
+				http.NotFound(w, r)
+				return
+			}
+			switch mode {
+			case "plain":
+				io.WriteString(w, doc)
+			case "said":
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Write(zipped.Bytes())
+			default:
+				w.Write(zipped.Bytes())
+			}
+		}))
+		Cache = srv.URL + "/cache"
+		c := New(srv.Client(), "test", Token{})
+		n, ok, err := c.EpisodeNotes(context.Background(), "p1", "e2")
+		if err != nil || !ok || n.Text != "<p>two</p>" || n.ChaptersURL != "https://x/c.json" || len(n.Generated) != 1 {
+			t.Errorf("%s: %+v %v %v", mode, n, ok, err)
+		}
+		if _, ok, err := c.EpisodeNotes(context.Background(), "p1", "nope"); ok || err != nil {
+			t.Errorf("%s: a missing episode: %v %v", mode, ok, err)
+		}
+		if _, _, err := c.EpisodeNotes(context.Background(), "p2", "e1"); err == nil {
+			t.Errorf("%s: a missing podcast gave no error", mode)
+		}
+		srv.Close()
+	}
+}

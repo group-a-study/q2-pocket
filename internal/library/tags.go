@@ -133,12 +133,16 @@ func (l *Library) cleanTo(ctx context.Context, part, dst string, e EpisodeInfo, 
 		return errUncut
 	}
 	if _, crashed := l.plain.Load(e.Key + ":" + e.EID); crashed { // the app crashed checking it: tagged only
+		// marked Ads Not Removed (the user's rule, 2026-11-16: a whole check or none, and those
+		// without one found and fetched again later)
 		note("Left as it came: Pocket crashed checking it for ads")
+		l.o.Clean.Unchecked(cleanEpisode(e), "Ads not removed: Pocket crashed checking it for ads")
 		return errUncut
 	}
 	defer func() {
 		if p := recover(); p != nil { // a file broken some way not foreseen: it goes in uncut
 			os.Remove(dst)
+			l.o.Clean.Unchecked(cleanEpisode(e), "Ads not removed: Pocket couldn't read this episode to check it")
 			err = errUncut
 		}
 	}()

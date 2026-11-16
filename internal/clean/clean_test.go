@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"q2-pocket/internal/mp3"
 	"q2-pocket/internal/pocketcasts"
@@ -145,10 +147,14 @@ func TestNotMP3(t *testing.T) {
 	}
 }
 
-// An episode too big for the memory the Q2 has free goes in as it came, unchecked, rather than
-// taking the app down with it; one whose frames fit but not the ad check has its sponsor reads cut
-// alone. The memory is reckoned by its frames, not its bytes (a 320 kbps episode has fewer a MB).
+// An episode too big to check for ads in the memory the Q2 has free goes in as it came, marked
+// Unchecked (Ads Not Removed) for a Remove Ads Again later, rather than taking the app down with it
+// or being checked in part (the user's rule: a whole check or none). The memory is reckoned by its
+// frames, not its bytes (a 320 kbps episode has fewer a MB), with the library of adverts and the
+// episodes it is compared with.
 func TestTooBigForMemory(t *testing.T) {
+	defer func(w time.Duration) { memoryWait = w }(memoryWait)
+	memoryWait = 0
 	dir := t.TempDir()
 	part := filepath.Join(dir, "ep.part")
 	_, b := fixture(t, "content.mp3")
@@ -158,25 +164,41 @@ func TestTooBigForMemory(t *testing.T) {
 	if s == nil || frames < len(s.Frames) || frames > len(s.Frames)*5/4+16 {
 		t.Fatal("frames", frames, s)
 	}
+	os.MkdirAll(filepath.Join(dir, "frames"), 0o755)
+	os.WriteFile(filepath.Join(dir, "frames", "other-ep.bin"), make([]byte, 4000), 0o644)
+	os.WriteFile(filepath.Join(dir, "ads.bin"), []byte("Q2ADS1\n"), 0o644)
+	want := need(frames, 7, 4000) + reserve
 	asked := 0
-	c := &Cleaner{Dir: dir, Settings: func() Settings { return Settings{Ads: true} },
-		Free: func() int64 { asked++; return scanFor(frames) - 1 }}
+	c := &Cleaner{Dir: dir, Settings: func() Settings { return Settings{Ads: true, Sponsors: true} },
+		Free: func() int64 { asked++; return want - 1 }}
 	if ed, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); ed != nil || err != nil || asked != 1 {
 		t.Fatal(ed, err, asked)
 	}
-	if r := Load(dir, "k", "e"); r == nil || r.Summary() != "Too long to check in the Q2's free memory: left as it came" {
+	if r := Load(dir, "k", "e"); r == nil || !r.Unchecked || len(r.Cuts) != 0 || !strings.HasPrefix(r.Summary(), "Ads not removed") {
 		t.Errorf("%+v", r)
 	}
-	c.Free = func() int64 { return memoryFor(frames) - 1 }
-	if _, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); err != nil {
-		t.Fatal(err)
-	}
-	if r := Load(dir, "k", "e"); r == nil || r.Note != "" || !slices.Contains(r.Sources, "ads not checked: too little of the Q2's memory free") {
-		t.Errorf("%+v", r)
-	}
-	c.Free = func() int64 { return memoryFor(frames) }
+	c.Free = func() int64 { return want }
 	if ed, err := c.Clean(context.Background(), part, Episode{Key: "k", EID: "e"}, func(string) {}); ed == nil || err != nil {
 		t.Fatal("room enough: checked", ed, err)
+	}
+	if r := Load(dir, "k", "e"); r == nil || r.Unchecked {
+		t.Errorf("checked: %+v", r)
+	}
+}
+
+// A cut copy that couldn't be written leaves the adverts in: Ads Not Removed.
+func TestUncutIsUnchecked(t *testing.T) {
+	c := &Cleaner{Dir: t.TempDir()}
+	e := Episode{Key: "k", EID: "e"}
+	c.save(e, &Report{Cuts: []Cut{{From: 1, To: 30, Kind: "ad"}}})
+	c.Uncut(e, "Couldn't write the cut episode: left as it came")
+	if r := Load(c.Dir, "k", "e"); r == nil || !r.Unchecked || len(r.Cuts) != 0 {
+		t.Errorf("%+v", r)
+	}
+	c.save(e, &Report{})
+	c.Uncut(e, "Couldn't write the cut episode: left as it came")
+	if r := Load(c.Dir, "k", "e"); r == nil || r.Unchecked {
+		t.Errorf("nothing found, nothing left in: %+v", r)
 	}
 }
 

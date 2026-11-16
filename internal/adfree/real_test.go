@@ -65,7 +65,7 @@ func TestReal(t *testing.T) {
 	if dir == "" {
 		t.Skip("Q2POCKET_DAI unset")
 	}
-	hashes := func(name string) []uint64 {
+	hashes := func(name string) []uint32 {
 		s, err := mp3.ScanFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(name, err)

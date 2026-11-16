@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,6 +131,10 @@ func pocketShow(t *testing.T, room bool) []byte {
 			t.Fatalf("not downloaded: %+v", l.DL.Jobs())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	eps, ok := l.PCEpisodes([]PCID{{podUUID, "missing"}, {podUUID, epUUID}, {"nopod", epUUID}})
+	if !slices.Equal(ok, []bool{false, true, false}) || !eps[1].OnCard || eps[1].Path != e.Path || eps[1].Size != e.Size {
+		t.Errorf("as a batch: %v %+v", ok, eps)
 	}
 	got, err := mp3.ScanFile(e.Path)
 	if err != nil {

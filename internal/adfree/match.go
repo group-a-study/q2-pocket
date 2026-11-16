@@ -17,6 +17,8 @@
 package adfree
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 )
 
@@ -28,8 +30,11 @@ const (
 // Run is n frames of a starting at A that are the same as n frames of b starting at B.
 type Run struct{ A, B, N int }
 
+// entry is an indexed shingle: its hash's top 32 bits (the low ones chose it, sampled), and where
+// it starts. A seed found by the top bits alone is checked frame by frame as it is grown, so a
+// rare clash costs a look, never a false match. 8 bytes: a quarter of b's frames, 2 bytes a frame.
 type entry struct {
-	h   uint64
+	h   uint32
 	pos int32
 }
 
@@ -38,10 +43,10 @@ type index struct {
 	e []entry
 }
 
-func shingleAt(h []uint64, i int) uint64 {
+func shingleAt(h []uint32, i int) uint64 {
 	x := uint64(0x9e3779b97f4a7c15)
 	for k := 0; k < shingle; k++ {
-		x = (x ^ h[i+k]) * 0x100000001b3
+		x = (x ^ uint64(h[i+k])) * 0x100000001b3
 		x ^= x >> 29
 	}
 	return x
@@ -49,27 +54,36 @@ func shingleAt(h []uint64, i int) uint64 {
 
 func sampled(s uint64) bool { return s%sample == 0 }
 
-func newIndex(h []uint64) *index {
-	ix := &index{}
+func key(s uint64) uint32 { return uint32(s >> 32) }
+
+func newIndex(h []uint32) *index {
+	n := 0 // counted first: the index is made at its size, not grown (copied) as it fills
 	for i := 0; i+shingle <= len(h); i++ {
-		if s := shingleAt(h, i); sampled(s) {
-			ix.e = append(ix.e, entry{s, int32(i)})
+		if sampled(shingleAt(h, i)) {
+			n++
 		}
 	}
-	sort.Slice(ix.e, func(i, j int) bool {
-		if ix.e[i].h != ix.e[j].h {
-			return ix.e[i].h < ix.e[j].h
+	ix := &index{e: make([]entry, 0, n)}
+	for i := 0; i+shingle <= len(h); i++ {
+		if s := shingleAt(h, i); sampled(s) {
+			ix.e = append(ix.e, entry{key(s), int32(i)})
 		}
-		return ix.e[i].pos < ix.e[j].pos
+	}
+	slices.SortFunc(ix.e, func(a, b entry) int {
+		if c := cmp.Compare(a.h, b.h); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.pos, b.pos)
 	})
 	return ix
 }
 
-// find is the positions of s in the index, at most max.
-func (ix *index) find(s uint64, max int) []int32 {
-	i := sort.Search(len(ix.e), func(i int) bool { return ix.e[i].h >= s })
-	var out []int32
-	for ; i < len(ix.e) && ix.e[i].h == s && len(out) < max; i++ {
+// find is the positions of s in the index, at most max, into out.
+func (ix *index) find(s uint64, max int, out []int32) []int32 {
+	k := key(s)
+	i, _ := slices.BinarySearchFunc(ix.e, k, func(e entry, k uint32) int { return cmp.Compare(e.h, k) })
+	out = out[:0]
+	for ; i < len(ix.e) && ix.e[i].h == k && len(out) < max; i++ {
 		out = append(out, ix.e[i].pos)
 	}
 	return out
@@ -77,7 +91,7 @@ func (ix *index) find(s uint64, max int) []int32 {
 
 // distinct is whether frames [from, from+n) of h are varied enough to be sound rather than
 // silence, which encodes the same anywhere: more than 3 in 5 of its frames unlike the one before.
-func distinct(h []uint64, from, n int) bool {
+func distinct(h []uint32, from, n int) bool {
 	same := 0
 	for i := from + 1; i < from+n; i++ {
 		if h[i] == h[i-1] {
@@ -89,19 +103,28 @@ func distinct(h []uint64, from, n int) bool {
 
 // Runs is every stretch of at least min frames of a that b also has, longest first where they
 // overlap in a. self: a and b are the same file, and a run must not be matched with itself.
-func Runs(a, b []uint64, min int, self bool) []Run {
+func Runs(a, b []uint32, min int, self bool) []Run {
 	if len(a) < shingle || len(b) < shingle {
 		return nil
 	}
-	ix := newIndex(b)
+	return runsIn(a, b, newIndex(b), min, self)
+}
+
+// runsIn is Runs with b's index made already.
+func runsIn(a, b []uint32, ix *index, min int, self bool) []Run {
+	if len(a) < shingle || len(b) < shingle {
+		return nil
+	}
 	var runs []Run
+	var at []int32
 	for i := 0; i+shingle <= len(a); i++ {
 		s := shingleAt(a, i)
 		if !sampled(s) {
 			continue
 		}
 		best := Run{}
-		for _, p := range ix.find(s, 8) {
+		at = ix.find(s, 8, at)
+		for _, p := range at {
 			j := int(p)
 			if self && j == i {
 				continue

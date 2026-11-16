@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -181,6 +182,24 @@ type episodeJSON struct {
 	OnCard   bool      `json:"onCard"`
 	Size     int64     `json:"size"`
 	Job      *jobJSON  `json:"job,omitempty"`
+	// NotRemoved: on the Q2 with its ads, why (Ads Not Removed)
+	NotRemoved string `json:"notRemoved,omitempty"`
+}
+
+// onCardJSON is an episode on the Q2, as the phone page's On the Q2 lists it.
+type onCardJSON struct {
+	Key        string    `json:"key"`
+	EID        string    `json:"eid"`
+	Title      string    `json:"title"`
+	Show       string    `json:"show"`
+	Date       time.Time `json:"date"`
+	Duration   int       `json:"duration"`
+	Size       int64     `json:"size"`
+	PC         string    `json:"pc,omitempty"`
+	UUID       string    `json:"uuid,omitempty"`
+	Cut        string    `json:"cut,omitempty"`
+	NotRemoved string    `json:"notRemoved,omitempty"` // why its ads are still in it (Ads Not Removed)
+	Job        *jobJSON  `json:"job,omitempty"`
 }
 
 func (w *web) api(rw http.ResponseWriter, r *http.Request) {
@@ -233,13 +252,18 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		for _, s := range lib.Shows() {
 			shows = append(shows, showOut(s))
 		}
-		jobs := []jobJSON{}
-		for _, j := range lib.DL.Jobs() {
+		jobs := []jobJSON{} // the first perPage (a Download All queues hundreds)
+		all := lib.DL.Jobs()
+		for _, j := range all[:min(len(all), perPage)] {
 			jobs = append(jobs, jobOut(j))
 		}
-		eps, bytes := lib.Downloaded()
-		reply(rw, http.StatusOK, map[string]any{"version": version, "shows": shows, "jobs": jobs,
-			"downloaded": len(eps), "bytes": bytes, "refreshing": lib.Refreshing()})
+		c := w.a.onCard() // the card read at most every cardFor, not at every look
+		var bytes int64
+		for _, e := range c.eps {
+			bytes += e.Size
+		}
+		reply(rw, http.StatusOK, map[string]any{"version": version, "shows": shows, "jobs": jobs, "jobsMore": len(all) - len(jobs),
+			"downloaded": len(c.eps), "bytes": bytes, "refreshing": lib.Refreshing()})
 	case route == "show" && !post:
 		key := r.URL.Query().Get("key")
 		si, ok := lib.Show(key)
@@ -249,6 +273,7 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		}
 		eps, _ := lib.Episodes(key)
 		out := make([]episodeJSON, 0, len(eps))
+		not := w.a.onCard().not
 		for _, e := range eps {
 			ej := episodeJSON{EID: e.EID, Title: e.Title, Date: e.Date, Duration: e.Duration, Length: e.Length,
 				OnCard: e.OnCard, Size: e.Size, PC: e.PC, UUID: e.Feed.PC}
@@ -260,6 +285,9 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			if e.Job != nil {
 				j := jobOut(*e.Job)
 				ej.Job = &j
+			}
+			if e.OnCard {
+				ej.NotRemoved = not[e.Key+":"+e.EID]
 			}
 			out = append(out, ej)
 		}
@@ -333,7 +361,40 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			fail(err)
 			return
 		}
+		cardChanged()
 		reply(rw, http.StatusOK, map[string]string{"message": msg})
+	case route == "redoall" && post: // Remove Ads Again for every episode whose ads weren't removed
+		n := w.a.redoAll()
+		msg := "Removing the ads again from " + plural(n, "episode")
+		if n == 0 {
+			msg = "They're all being downloaded again already"
+		}
+		reply(rw, http.StatusOK, map[string]string{"message": msg})
+	case route == "oncard" && !post: // the episodes on the Q2, newest first; filter=notremoved: those with their ads
+		c := w.a.onCard()
+		eps := c.eps
+		if r.URL.Query().Get("filter") == "notremoved" {
+			eps, _ = w.a.notRemovedEps()
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		from, to, at, pages := pageOf(len(eps), page)
+		out := make([]onCardJSON, 0, to-from)
+		for _, e := range eps[from:to] {
+			o := onCardJSON{Key: e.Key, EID: e.EID, Title: e.Title, Show: e.Show, Date: e.Date, Duration: e.Duration,
+				Size: e.Size, PC: e.PC, UUID: e.Feed.PC, NotRemoved: c.not[e.Key+":"+e.EID]}
+			if r := clean.Load(w.a.opts.dir, e.Key, e.EID); r != nil {
+				if ads, sp, _ := r.Removed(); ads+sp > 0 {
+					o.Cut = r.Summary()
+				}
+			}
+			if j := lib.DL.Job(e.Key, e.EID); j != nil {
+				jj := jobOut(*j)
+				o.Job = &jj
+			}
+			out = append(out, o)
+		}
+		reply(rw, http.StatusOK, map[string]any{"episodes": out, "total": len(eps), "all": len(c.eps),
+			"notRemoved": len(c.not), "page": at, "pages": pages, "perPage": perPage, "from": from})
 	case route == "cancel" && post: // kept off: Up Next won't fetch it again by itself
 		lib.DL.Cancel(body.Key, body.EID)
 		w.a.sy.keepOff(body.Key+":"+body.EID, true)
@@ -343,6 +404,7 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			fail(err)
 			return
 		}
+		cardChanged()
 		w.a.sy.keepOff(body.Key+":"+body.EID, true)
 		reply(rw, http.StatusOK, map[string]bool{"ok": true})
 	default:

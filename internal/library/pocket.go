@@ -233,6 +233,55 @@ func (l *Library) PCEpisode(podcast, uuid string) (EpisodeInfo, error) {
 	return EpisodeInfo{}, ErrNoEpisode
 }
 
+// PCID is an episode as Pocket Casts names it: its show's id and its own.
+type PCID struct{ Podcast, UUID string }
+
+// PCEpisodes is PCEpisode for many at once (a page of Up Next): each show's folder read once, its
+// episodes looked up by a map made once. ok[i] is false for one the library doesn't have.
+func (l *Library) PCEpisodes(ids []PCID) (out []EpisodeInfo, ok []bool) {
+	out, ok = make([]EpisodeInfo, len(ids)), make([]bool, len(ids))
+	var found []EpisodeInfo
+	var at []int
+	l.mu.Lock()
+	shows := make(map[string]*show, len(l.shows))
+	for _, s := range l.shows {
+		if s.PC != "" && s.c != nil {
+			if _, dup := shows[s.PC]; !dup {
+				shows[s.PC] = s
+			}
+		}
+	}
+	byUUID := map[*show]map[string]int{}
+	for i, id := range ids {
+		s := shows[id.Podcast]
+		if s == nil || id.Podcast == "" {
+			continue
+		}
+		m, made := byUUID[s]
+		if !made {
+			m = make(map[string]int, 2*len(s.c.Episodes))
+			for k := len(s.c.Episodes) - 1; k >= 0; k-- { // the first wins, as PCEpisode's
+				e := s.c.Episodes[k]
+				m[e.GUID] = k
+				if e.PC != "" {
+					m[e.PC] = k
+				}
+			}
+			byUUID[s] = m
+		}
+		if k, has := m[id.UUID]; has {
+			found = append(found, l.episode(s, s.c.Episodes[k]))
+			at = append(at, i)
+		}
+	}
+	l.mu.Unlock()
+	found = l.mark(found)
+	for j, i := range at {
+		out[i], ok[i] = found[j], true
+	}
+	return out, ok
+}
+
 // Has is whether a show's episodes have been read at least once.
 func (l *Library) Has(key string) bool {
 	l.mu.Lock()
