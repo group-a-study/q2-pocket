@@ -30,6 +30,7 @@ import (
 	"q2-pocket/internal/pocketcasts"
 	"q2-pocket/internal/sponsor"
 	"q2-pocket/internal/tag"
+	"q2-pocket/internal/youtube"
 )
 
 // Settings is what the user chose.
@@ -67,6 +68,7 @@ type Cleaner struct {
 	Settings func() Settings
 	Free     func() int64                     // bytes of memory free for a check (-1 unknown); nil: no limit
 	Log      func(format string, args ...any) // the debug log's lines; nil for none
+	YouTube  *youtube.Client                  // episodes' YouTube videos (FindVideo); nil for none
 
 	mu    sync.Mutex // one episode at a time: the library of adverts is read and written whole
 	notes map[string]notesAt
@@ -96,6 +98,10 @@ type Report struct {
 	// it, its cut copy couldn't be written): listed as Ads Not Removed, for a Remove Ads Again
 	Unchecked bool     `json:"unchecked,omitempty"`
 	Sources   []string `json:"sources,omitempty"`
+	// Video: the copy is the episode's YouTube video's audio (an M4A), not its feed's; its cuts
+	// are seconds of the video. Shift is how many seconds longer the feed's copy runs (FromFeed).
+	Video string  `json:"video,omitempty"`
+	Shift float64 `json:"shift,omitempty"`
 }
 
 // Edit is the frames to leave out of the download, and the stream they are of; and the chapters its
@@ -387,23 +393,17 @@ func TranscriptPath(episode string) string {
 // of it, about this much.
 const captionMax = 60
 
-// keepTranscript writes cues as an .lrc beside the episode at path, each cue's time mapped by at to
-// the episode's second on the card (a cue whose start was cut, not at all). A cue longer than
-// captionMax is split at its words, its time shared out by length, so each line fits the Q2's page.
+// keepTranscript writes cues as an .lrc beside the episode at path, each line's time mapped by at to
+// the episode's second on the card (a line in a cut, not at all; nor one that would go back in
+// time). A cue longer than captionMax is split at its words, its time shared out by length, so each
+// line fits the Q2's page.
 func keepTranscript(path string, cues []sponsor.Cue, at func(float64) (float64, bool)) {
 	if path == "" {
 		return
 	}
 	var b strings.Builder
+	last := -1.0
 	for _, c := range cues {
-		from, ok := at(c.From)
-		if !ok {
-			continue
-		}
-		to, ok := at(c.To)
-		if !ok || to < from {
-			to = from + c.To - c.From
-		}
 		parts := captions(c.Text)
 		total := 0
 		for _, p := range parts {
@@ -411,8 +411,14 @@ func keepTranscript(path string, cues []sponsor.Cue, at func(float64) (float64, 
 		}
 		done := 0
 		for _, p := range parts {
-			t := from + (to-from)*float64(done)/float64(max(total, 1))
+			// each line at its own moment of the cue (its time shared out by length), mapped on its
+			// own: a line in a cut goes, the rest of its cue stays
+			t, ok := at(c.From + (c.To-c.From)*float64(done)/float64(max(total, 1)))
 			done += len(p)
+			if !ok || t < last {
+				continue
+			}
+			last = t
 			ms := int(math.Round(t * 1000))
 			fmt.Fprintf(&b, "[%02d:%02d.%02d]%s\n", ms/60000, ms/1000%60, ms%1000/10, p)
 		}
@@ -760,6 +766,16 @@ func (r *Report) Summary() string {
 	if r.Note != "" && ads+sp == 0 {
 		return r.Note
 	}
+	if r.Video != "" { // YouTube's copy: no adverts in it to find
+		if sp == 0 {
+			return "From YouTube: no sponsor reads found"
+		}
+		return "From YouTube: " + r.summary(0, sp, sec)
+	}
+	return r.summary(ads, sp, sec)
+}
+
+func (r *Report) summary(ads, sp int, sec float64) string {
 	var parts []string
 	if ads > 0 {
 		parts = append(parts, plural(ads, "ad"))
@@ -1007,7 +1023,7 @@ func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Se
 			return false
 		}
 		for _, sg := range segs {
-			if d := sg.To - sg.From; d < minSponsor || d > maxSponsor {
+			if d := sg.To - sg.From; d < minLength(sg) || d > maxSponsor {
 				continue
 			}
 			from, to := sg.From, sg.To
@@ -1123,7 +1139,7 @@ func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Se
 	var placed *sponsor.Placed
 	if len(src.cues) > 0 {
 		if fit := sponsor.Fit(sponsor.End(src.cues), kept, original, true); fit != sponsor.Unplaced {
-			add(sponsor.Reads(src.cues), fit)
+			add(sponsor.Sponsored(src.cues), fit)
 		} else if placed = sponsor.Place(src.cues, slots, original); placed != nil {
 			add(placed.Reads, sponsor.Original)
 			rep.Sources = append(rep.Sources, fmt.Sprintf("the transcript lined up through %s (its copy had other adverts)",

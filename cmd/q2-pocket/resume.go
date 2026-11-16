@@ -129,3 +129,12 @@ func (a *app) replaced(path string, cuts [][2]float64) {
 		q2.WriteFile(a.opts.recut, []byte(b.String()))
 	}
 }
+
+// moved is an episode on the card replaced by a copy under another name (its MP3 by its YouTube
+// video's M4A, or back), at mapping a second of the old copy to the new: the place Q2 Pod keeps in
+// the old one goes to the new one, at the same moment.
+func (a *app) moved(old, path string, at func(float64) float64) {
+	if sec, ok := a.places()[placeKey(old)]; ok && sec > 0 {
+		a.setPlaces(map[string]int{path: int(math.Max(at(float64(sec)), 1))})
+	}
+}

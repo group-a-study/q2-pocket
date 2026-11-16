@@ -748,7 +748,7 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 			if sec <= 0 {
 				return sec
 			}
-			return int(r.Original(float64(sec)))
+			return int(r.ToFeed(float64(sec)))
 		}
 		v := side{Q2: served(q), Q2Was: served(st.Q2), PC: srv.PlayedUpTo, PCWas: st.PC, Status: srv.Status,
 			Known: known, Done: st.Done, NearEnd: st.Q2 > 0 && float64(st.Q2) >= cutLength(r, e)-playedTail.Seconds()}
@@ -766,7 +766,7 @@ func (s *syncer) places(ctx context.Context, inprog []pocketcasts.Episode) {
 				st.PC = srv.PlayedUpTo
 			}
 		case pull:
-			pulls[e.Path], pulled[e.Path] = int(r.Kept(float64(at))), st
+			pulls[e.Path], pulled[e.Path] = int(r.FromFeed(float64(at))), st
 			st.Q2, st.PC, st.Done = q, at, false
 		case played: // finished on the Q2: out of the Q2's Up Next; two-way, the account's too
 			if s.twoWay() {

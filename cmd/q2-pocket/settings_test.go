@@ -58,3 +58,22 @@ func TestAdRemovalOnByDefault(t *testing.T) {
 		t.Errorf("not saved on: %s", b)
 	}
 }
+
+// The phone page's search: every word, in the title or the show, case and accents aside.
+func TestMatchName(t *testing.T) {
+	for _, c := range []struct {
+		q, title, show string
+		want           bool
+	}{
+		{"lex", "#504 – Russia-Ukraine War", "Lex Fridman Podcast", true},
+		{"LEX ukraine", "#504 – Russia-Ukraine War", "Lex Fridman Podcast", true},
+		{"lex huberman", "#504 – Russia-Ukraine War", "Lex Fridman Podcast", false},
+		{"", "anything", "", true},
+		{"zelenskyy", "Zélenskyy and Putin", "Show", true},
+		{"#504 – russia", "#504 - Russia-Ukraine War", "Lex", true},
+	} {
+		if got := matchName(c.q, c.title, c.show); got != c.want {
+			t.Errorf("%+v: %v", c, got)
+		}
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"q2-pocket/internal/clean"
+	"q2-pocket/internal/feed"
 	"q2-pocket/internal/q2"
 )
 
@@ -588,6 +589,30 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	if j.redo && e.OnCard && l.o.Clean != nil {
 		old = clean.Load(l.o.Clean.Dir, j.Key, j.EID)
 	}
+	// its YouTube video's audio, when it has a video that can be checked (the user's, 2026-11-17)
+	if _, crashed := l.plain.Load(j.Key + ":" + j.EID); l.o.Clean != nil && l.o.Clean.YouTube != nil && !crashed {
+		note("Looking for its YouTube video")
+		vc, why := l.o.Clean.FindVideo(ctx, cleanEpisode(e))
+		if vc != nil {
+			ve, was := withExt(e, ".m4a")
+			err := l.fromVideo(ctx, ve, vc, progress, note)
+			if err == nil {
+				l.logf("download %q: from YouTube (%s), %d cut", e.Title, vc.Video.ID, len(vc.Cuts))
+				l.commitName(ve, was)
+				l.replaced(e, ve, j, old)
+				return nil
+			}
+			var p permanent
+			if ctx.Err() != nil || errors.Is(err, q2.ErrNoCard) || errors.As(err, &p) {
+				return err
+			}
+			l.logf("download %q: the YouTube copy failed (%v): the feed's instead", e.Title, err)
+			removePart(l.partPath(j.Key, j.EID))
+		} else if why != "" {
+			l.logf("download %q: not from YouTube: %s", e.Title, why)
+		}
+	}
+	e, was := withExt(e, feed.Ext(e.Feed.Type, e.Feed.URL)) // a YouTube copy's name before: the feed's back
 	err = l.transfer(ctx, u, e, l.partPath(j.Key, j.EID), progress, note)
 	var no refused
 	if errors.As(err, &no) {
@@ -611,13 +636,35 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	if errors.As(err, &no) {
 		return permanent{err}
 	}
-	if err == nil && j.redo && e.OnCard {
-		l.changed()
-		if l.o.Replaced != nil && l.o.Clean != nil {
-			l.o.Replaced(e.Path, clean.Recut(old, clean.Load(l.o.Clean.Dir, j.Key, j.EID)))
+	if err == nil {
+		prev := e
+		if was != "" {
+			prev.Path = was
+			l.commitName(e, was)
 		}
+		l.replaced(prev, e, j, old)
 	}
 	return err
+}
+
+// replaced tells of a copy on the card replaced by a new one (a redo): the Q2's place in it moved
+// with the cuts (Replaced), or to the new file when its name changed (Moved: an MP3 replaced by a
+// YouTube copy, or back), through the feed's timeline.
+func (l *Library) replaced(prev, now EpisodeInfo, j *job, old *clean.Report) {
+	if !j.redo || !prev.OnCard || l.o.Clean == nil {
+		return
+	}
+	l.changed()
+	rep := clean.Load(l.o.Clean.Dir, j.Key, j.EID)
+	if prev.Path == now.Path {
+		if l.o.Replaced != nil {
+			l.o.Replaced(now.Path, clean.Recut(old, rep))
+		}
+		return
+	}
+	if l.o.Moved != nil {
+		l.o.Moved(prev.Path, now.Path, func(sec float64) float64 { return rep.FromFeed(old.ToFeed(sec)) })
+	}
 }
 
 // renewSource fetches a show's feed again, in full, for an episode's address when the feed is older
@@ -641,6 +688,7 @@ func (l *Library) renewSource(ctx context.Context, key, eid, old string) string 
 type partInfo struct {
 	Size           int64  `json:"size"` // the whole file's; -1 unknown
 	ETag, Modified string `json:",omitempty"`
+	Video          string `json:"video,omitempty"` // "yt:<id>:<itag>": a YouTube video's audio (fromVideo)
 }
 
 func removePart(part string) {
@@ -653,7 +701,7 @@ func (l *Library) transfer(ctx context.Context, u string, e EpisodeInfo, part st
 	var off int64
 	var was partInfo
 	if st, err := os.Stat(part); err == nil {
-		if b, err := os.ReadFile(part + ".json"); err == nil && json.Unmarshal(b, &was) == nil {
+		if b, err := os.ReadFile(part + ".json"); err == nil && json.Unmarshal(b, &was) == nil && was.Video == "" {
 			off = st.Size()
 		}
 	}

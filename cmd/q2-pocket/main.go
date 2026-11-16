@@ -29,9 +29,10 @@ import (
 	"q2-pocket/internal/q2spot"
 	"q2-pocket/internal/qr"
 	"q2-pocket/internal/tlsroots"
+	"q2-pocket/internal/youtube"
 )
 
-const version = "q2-v1.14"
+const version = "q2-v1.15"
 
 // userAgent is the app's name to the hosts it fetches from: hosts count listens by it.
 var userAgent = "Q2Pocket/" + version[len("q2-v"):] + " (Shanling Q2; Q2 Pod card app)"
@@ -192,7 +193,8 @@ func start(o options) (*app, error) {
 	cl := &clean.Cleaner{Dir: o.dir, Fetch: &http.Client{Transport: tlsroots.Transport(), Timeout: 30 * time.Minute},
 		API: &http.Client{Transport: feeds, Timeout: 60 * time.Second}, Agent: agent, PC: pc,
 		Settings: func() clean.Settings { return a.cleanSettings() },
-		Free:     memFree, Log: logMem}
+		Free:     memFree, Log: logMem,
+		YouTube: &youtube.Client{HTTP: &http.Client{Transport: feeds, Timeout: 60 * time.Second}, Agent: agent}}
 	lib, err := library.Open(library.Options{
 		Dir:     o.dir,
 		Root:    filepath.Join(o.card, "Podcasts"),
@@ -209,6 +211,7 @@ func start(o options) (*app, error) {
 		// an episode gone at its address: looked for in its show's list, Apple's directory, Podchaser
 		Elsewhere: func(ctx context.Context, e library.EpisodeInfo) string { return a.elsewhere(ctx, e) },
 		Replaced:  func(path string, cuts [][2]float64) { a.replaced(path, cuts) },
+		Moved:     func(old, path string, at func(float64) float64) { a.moved(old, path, at) },
 	})
 	if err != nil {
 		return nil, err

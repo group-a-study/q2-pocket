@@ -66,6 +66,9 @@ type Options struct {
 	// Replaced: a copy on the card replaced by a new one, cut again (Remove Ads Again), the seconds
 	// of the old copy the new one leaves out (clean.Recut); nil for none
 	Replaced func(path string, cuts [][2]float64)
+	// Moved: a copy on the card replaced by one under another name (an MP3 by its YouTube video's
+	// M4A, or back), at mapping a second of the old to the new; nil for none
+	Moved func(old, path string, at func(float64) float64)
 }
 
 func (l *Library) logf(format string, args ...any) {

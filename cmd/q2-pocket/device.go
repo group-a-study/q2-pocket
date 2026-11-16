@@ -144,7 +144,7 @@ func episodeRow(e library.EpisodeInfo, withShow bool, at int, dir string) q2spot
 	cut := "" // what was cut from it, when something was; or that its ads are still in it
 	if e.OnCard {
 		r := clean.Load(dir, e.Key, e.EID)
-		if ads, sp, _ := r.Removed(); ads+sp > 0 {
+		if r.Shown() {
 			cut = r.Summary()
 		}
 		if _, still := notRemoved(r); still {

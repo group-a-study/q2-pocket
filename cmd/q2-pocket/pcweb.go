@@ -23,8 +23,9 @@ import (
 //	POST login {email, password} signs in (the password goes to Pocket Casts, never to the card)
 //	POST logout, sync
 //	GET  settings; POST settings {…}  the cleaning's and Up Next's settings; keys are write-only
-//	GET  upnext?page=&filter=; GET list?name=inprog|new|starred|history&page=&filter=
-//	     (a page of perPage; filter: oncard, notoncard, downloading, failed, notremoved)
+//	GET  upnext?page=&filter=&q=; GET list?name=inprog|new|starred|history&page=&filter=&q=
+//	     (a page of perPage; filter: oncard, notoncard, downloading, failed, notremoved; q: a
+//	     search of titles and shows, matchName)
 //	POST episode {podcast, uuid, action: next|last|remove|star|unstar|played|unplayed|download}
 //	GET  files; POST file {uuid, action: download|delete}
 //	GET  discover?name=; POST discover {uuid}
@@ -90,7 +91,7 @@ func (w *web) pcEpisodes(eps []pocketcasts.Episode) []pcEpisodeJSON {
 			}
 			if ep.OnCard {
 				r := clean.Load(a.opts.dir, ep.Key, ep.EID)
-				if ads, sp, _ := r.Removed(); ads+sp > 0 {
+				if r.Shown() {
 					j.Cut = r.Summary()
 				}
 				if not == nil {
@@ -152,6 +153,15 @@ func (w *web) filtered(eps []pocketcasts.Episode, filter string) []pocketcasts.E
 // pcPageJSON is a page of a list of the account's episodes: filtered, then paged.
 func (w *web) pcPageJSON(eps []pocketcasts.Episode, q url.Values) map[string]any {
 	all := len(eps)
+	if name := q.Get("q"); name != "" { // a search: the episodes named so
+		var named []pocketcasts.Episode
+		for _, e := range eps {
+			if matchName(name, e.Title, cmpOr(w.a.sy.title(e.Show()), e.PodcastTitle)) {
+				named = append(named, e)
+			}
+		}
+		eps = named
+	}
 	eps = w.filtered(eps, q.Get("filter"))
 	page, _ := strconv.Atoi(q.Get("page"))
 	from, to, at, pages := pageOf(len(eps), page)

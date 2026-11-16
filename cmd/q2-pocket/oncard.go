@@ -88,10 +88,22 @@ func (a *app) notRemovedEps() ([]library.EpisodeInfo, map[string]string) {
 
 // redoAll is Remove Ads Again for every episode whose ads weren't removed (one being fetched again
 // already left as it is): how many were asked for.
-func (a *app) redoAll() int {
-	eps, _ := a.notRemovedEps()
+func (a *app) redoAll() int { return a.redoMatching("", "notremoved") }
+
+// redoMatching is Remove Ads Again for every episode on the Q2 the phone page's On the Q2 list
+// shows: those whose ads weren't removed (filter "notremoved") or all, of them those named as q asks
+// (matchName; the user's, 2026-11-17: find every Lex Fridman episode on the Q2 and download them all
+// again, now from YouTube without their sponsors). How many were asked for.
+func (a *app) redoMatching(q, filter string) int {
+	eps := a.onCard().eps
+	if filter == "notremoved" {
+		eps, _ = a.notRemovedEps()
+	}
 	n := 0
 	for _, e := range eps {
+		if !matchName(q, e.Title, e.Show) {
+			continue
+		}
 		if a.lib.DL.Job(e.Key, e.EID) != nil {
 			continue
 		}
@@ -137,3 +149,26 @@ func (a *app) leftOf(eps []pocketcasts.Episode) int {
 	leftCount.at, leftCount.n, leftCount.of = time.Now(), n, len(eps)
 	return n
 }
+
+// matchName is whether an episode's title and show have every word of q in them, case and accents
+// aside ("lex" finds every Lex Fridman Podcast episode; "" finds every episode).
+func matchName(q, title, show string) bool {
+	words := strings.Fields(fold(q))
+	if len(words) == 0 {
+		return true
+	}
+	in := fold(title + " " + show)
+	for _, w := range words {
+		if !strings.Contains(in, w) {
+			return false
+		}
+	}
+	return true
+}
+
+// fold is s in lower case, its common accented letters plain (é as e, ø as o).
+func fold(s string) string { return accents.Replace(strings.ToLower(s)) }
+
+var accents = strings.NewReplacer("á", "a", "à", "a", "â", "a", "ä", "a", "ã", "a", "å", "a", "é", "e", "è", "e", "ê", "e",
+	"ë", "e", "í", "i", "ì", "i", "î", "i", "ï", "i", "ó", "o", "ò", "o", "ô", "o", "ö", "o", "õ", "o", "ø", "o", "ú", "u",
+	"ù", "u", "û", "u", "ü", "u", "ç", "c", "ñ", "n", "ß", "ss", "–", "-", "—", "-", "’", "'")

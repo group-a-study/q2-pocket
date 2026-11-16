@@ -31,6 +31,9 @@ func Transcript(b []byte, typ string) []Cue {
 	s := strings.TrimPrefix(string(b), "\ufeff")
 	t := strings.TrimSpace(s)
 	switch {
+	case strings.Contains(t[:min(len(t), 200)], `"events"`) || strings.Contains(t[:min(len(t), 200)], `"wireMagic"`):
+		lines, _ := json3(b)
+		return lines
 	case strings.Contains(typ, "json") || strings.HasPrefix(t, "{"):
 		return jsonCues(b)
 	case strings.Contains(typ, "html"):
@@ -96,6 +99,58 @@ func jsonCues(b []byte) []Cue {
 	return out
 }
 
+// json3 reads YouTube's captions as json3: its events as lines (an event's words, which on a speech
+// recognition track come a few at a time, each word once), and each word on its own with its own
+// time (an uploader's track: each event one word).
+func json3(b []byte) (lines, words []Cue) {
+	var r struct {
+		Events []struct {
+			Start int64 `json:"tStartMs"`
+			Dur   int64 `json:"dDurationMs"`
+			Segs  []struct {
+				Text   string `json:"utf8"`
+				Offset int64  `json:"tOffsetMs"`
+			} `json:"segs"`
+		} `json:"events"`
+	}
+	if json.Unmarshal(b, &r) != nil {
+		return nil, nil
+	}
+	for i, e := range r.Events {
+		end := e.Start + e.Dur
+		if i+1 < len(r.Events) && r.Events[i+1].Start > e.Start && r.Events[i+1].Start < end {
+			end = r.Events[i+1].Start // a rolling track's events overlap on the screen, not in speech
+		}
+		var text []string
+		first := len(words)
+		for _, sg := range e.Segs {
+			w := strings.TrimSpace(strings.ReplaceAll(sg.Text, "\n", " "))
+			if w == "" {
+				continue
+			}
+			text = append(text, w)
+			words = append(words, Cue{From: float64(e.Start+sg.Offset) / 1000, Text: w})
+		}
+		for j := first; j < len(words); j++ {
+			words[j].To = float64(end) / 1000
+			if j+1 < len(words) {
+				words[j].To = min(words[j].To, words[j+1].From)
+			}
+			words[j].To = max(words[j].To, words[j].From)
+		}
+		if len(text) > 0 {
+			lines = append(lines, Cue{From: float64(e.Start) / 1000, To: float64(max(end, e.Start)) / 1000, Text: strings.Join(text, " ")})
+		}
+	}
+	return lines, words
+}
+
+// Words is a json3 caption track's words, each with its own time (nil for another kind of track).
+func Words(b []byte) []Cue {
+	_, words := json3(b)
+	return words
+}
+
 // End is when a transcript's last line ends.
 func End(cues []Cue) float64 {
 	e := 0.0
@@ -109,7 +164,7 @@ func End(cues []Cue) float64 {
 // code, a discount), and ends at one of backs or where offers stop.
 var (
 	starts = regexp.MustCompile(`(?i)\b(` +
-		`(this|today'?s|the) (episode|show|podcast|program|programme|video)( is| was| has been)? (brought to you|sponsored|supported|made possible|presented|powered|underwritten) by|` +
+		`(this|today'?s|the) (episode|show|podcast|program|programme|video)( is| was| has been)?( also)? (brought to you|sponsored|supported|made possible|presented|powered|underwritten) by|` +
 		`support (for|of) (this|the|today'?s|our) (show|podcast|episode|program|programme) (comes?|is coming) from|` +
 		`(this|the following) (message|podcast) (comes from|is supported by|is sponsored by)|` +
 		`(is|are|was) (proudly )?(sponsored|brought to you) by|` +
@@ -199,4 +254,86 @@ func merge(s []Segment) []Segment {
 		out = append(out, x)
 	}
 	return out
+}
+
+// pointer is a host pointing to the sponsors instead of reading them (Lex Fridman's "To support it,
+// please check out our sponsors in the description"): a sponsor message all the same. Its words
+// whole, for a track without punctuation (YouTube's speech recognition) to end it.
+var pointer = regexp.MustCompile(`(?i)\b(` +
+	`(to support (it|this (podcast|show|channel)|the (podcast|show)),? )?(please,? )?` +
+	`(check out|visit|support|go to) (our|the|my|this (show|podcast)'?s?|today'?s) sponsors?` +
+	`(,? (in|below in|down in|listed in|linked in) the (description|show notes))?|` +
+	`sponsors? (are |is )?(listed |linked |mentioned )?(in|below in|down in) the (description|show notes)` +
+	`)\b`)
+
+const (
+	pointerBack = 12.0 // seconds a pointer's sentence may start before its words
+	pointerMax  = 30.0 // seconds a pointer's sentence may run
+)
+
+// Mentions is the sentences of a transcript that point to the sponsors ("please check out our
+// sponsors in the description, where you can also find links to contact me…"), from the sentence's
+// start to its end, a cue's times shared out over its text by length.
+func Mentions(cues []Cue) []Segment {
+	var text strings.Builder
+	starts := make([]int, len(cues)) // each cue's first byte in text
+	for i, c := range cues {
+		starts[i] = text.Len()
+		text.WriteString(c.Text)
+		text.WriteByte(' ')
+	}
+	s := text.String()
+	at := func(k int) float64 { // the time of byte k
+		i := sort.SearchInts(starts, k+1) - 1
+		if i < 0 {
+			return 0
+		}
+		c := cues[i]
+		n := max(len(c.Text), 1)
+		return c.From + (c.To-c.From)*float64(min(k-starts[i], n))/float64(n)
+	}
+	// a track with sentences (an uploader's), or without (YouTube's speech recognition: no
+	// punctuation, a pointer its own words)
+	sentences := strings.Count(s, ".")+strings.Count(s, "?")+strings.Count(s, "!") >= len(s)/400+1
+	var out []Segment
+	for _, m := range pointer.FindAllStringIndex(s, -1) {
+		if !sentences {
+			out = append(out, Segment{at(m[0]), at(m[1]), "a pointer to the sponsors in the transcript"})
+			continue
+		}
+		// its sentence: from the last one's end, to its own
+		from := m[0]
+		for from > 0 && !strings.ContainsRune(".!?", rune(s[from-1])) && at(m[0])-at(from-1) <= pointerBack {
+			from--
+		}
+		if from > 0 && !strings.ContainsRune(".!?", rune(s[from-1])) {
+			from = m[0] // no sentence's start near: its words
+		}
+		for from < m[0] && (s[from] == ' ' || s[from] == '-') {
+			from++
+		}
+		to := m[1]
+		for to < len(s) && !strings.ContainsRune(".!?", rune(s[to])) && at(to)-at(m[0]) <= pointerMax {
+			to++
+		}
+		if to < len(s) && strings.ContainsRune(".!?", rune(s[to])) {
+			to++
+		} else {
+			to = m[1] // no sentence's end near
+		}
+		out = append(out, Segment{at(from), at(to), "a pointer to the sponsors in the transcript"})
+	}
+	return merge(out)
+}
+
+// MinPointer is the shortest a pointer to the sponsors may be cut (shorter than any read: "to
+// support it please check out our sponsors in the description" takes Lex Fridman 3.5 seconds).
+const MinPointer = 2.0
+
+// IsPointer is whether a segment is a pointer to the sponsors (Mentions).
+func IsPointer(s Segment) bool { return strings.HasPrefix(s.Why, "a pointer to the sponsors") }
+
+// Sponsored is a transcript's sponsor reads and its pointers to the sponsors (Reads, Mentions).
+func Sponsored(cues []Cue) []Segment {
+	return merge(append(Reads(cues), Mentions(cues)...))
 }

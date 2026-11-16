@@ -617,7 +617,7 @@ func (a *app) readdPage(off int) q2spot.Reply {
 	for _, e := range eps[min(off, len(eps)):] {
 		cut := "Nothing cut"
 		r := clean.Load(a.opts.dir, e.Key, e.EID)
-		if ads, sp, _ := r.Removed(); ads+sp > 0 {
+		if r.Shown() {
 			cut = r.Summary()
 		}
 		if _, still := notRemoved(r); still {

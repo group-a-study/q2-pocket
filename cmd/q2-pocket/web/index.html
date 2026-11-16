@@ -97,6 +97,7 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
       <div class="card dl" id="upnextDl"></div>
       <p class="muted" id="upnextNote"></p>
       <div id="upnextAll"></div>
+      <form class="add" onsubmit="return false" style="margin-bottom:8px"><input id="upnextSearch" type="search" placeholder="Find by title or show" autocomplete="off" autocapitalize="off"></form>
       <div class="filters" id="upnextFilters"></div>
       <div class="pager" id="upnextPagerTop"></div>
       <div class="card" id="upnextList"></div>
@@ -105,6 +106,7 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
 
     <section id="oncard" class="view hidden">
       <p class="muted" id="oncardNote"></p>
+      <form class="add" onsubmit="return false" style="margin-bottom:8px"><input id="oncardSearch" type="search" placeholder="Find by title or show" autocomplete="off" autocapitalize="off"></form>
       <div class="filters" id="oncardFilters"></div>
       <div class="tools" id="oncardTools" style="margin: 0 0 12px"></div>
       <div class="pager" id="oncardPagerTop"></div>
@@ -130,6 +132,7 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
 
     <section id="list" class="view hidden">
       <p class="muted" id="listNote"></p>
+      <form class="add" onsubmit="return false" style="margin-bottom:8px"><input id="listSearch" type="search" placeholder="Find by title or show" autocomplete="off" autocapitalize="off"></form>
       <div class="filters" id="listFilters"></div>
       <div class="pager" id="listPagerTop"></div>
       <div class="card" id="listItems"></div>
@@ -152,7 +155,7 @@ nav button.on { background: var(--ink); color: var(--bg); border-color: var(--in
       <div class="card">
         <div class="sub">Always on: every episode is checked for all of these as it downloads.</div>
         <label class="switch"><input type="checkbox" id="setAds" checked disabled><span class="grow"><b>Remove ads</b><br><span class="sub">The ads a podcast's host stitches in as it serves an episode: found in the MP3's own frames, by comparing copies and episodes, and learned as they come back.</span></span></label>
-        <label class="switch"><input type="checkbox" id="setSponsors" checked disabled><span class="grow"><b>Remove sponsor reads</b><br><span class="sub">Read into the episode itself: from SponsorBlock (the episode's YouTube video or Spotify episode), its transcript and its chapters.</span></span></label>
+        <label class="switch"><input type="checkbox" id="setSponsors" checked disabled><span class="grow"><b>Remove sponsor reads</b><br><span class="sub">Read into the episode itself: from SponsorBlock (the episode's YouTube video or Spotify episode), its transcript and its chapters. An episode with a YouTube video comes from YouTube, which puts no ads in, its sponsor reads cut by SponsorBlock and the video's own captions.</span></span></label>
         <label class="switch"><input type="checkbox" id="setSelfPromo" checked disabled><span class="grow"><b>Also self-promotion</b><br><span class="sub">A show's plugs for itself, where SponsorBlock marks them.</span></span></label>
         <label class="switch"><input type="checkbox" id="setCopy" checked disabled><span class="grow"><b>Compare with a second copy</b><br><span class="sub">When the host would send other ads (its size says), downloads it too: what the copies share is the episode.</span></span></label>
       </div>
@@ -211,6 +214,9 @@ let toastTimer = 0;
 let upPage = 0, upFilter = "";     // Up Next's page (from 0) and filter (PC_FILTERS)
 let listPage = 0, listFilter = ""; // the open list's
 let cardPage = 0, cardFilter = ""; // On the Q2's ("notremoved": Ads Not Removed)
+// each list's search of titles and shows (the user's, 2026-11-17: every Lex Fridman episode on the
+// Q2 found, and all of them downloaded again at once)
+let upQuery = "", cardQuery = "", listQuery = "";
 let nextPick = 0;                  // Download Next's count as picked here (0: the Q2's)
 
 const TABS = [
@@ -338,7 +344,7 @@ function renderTabs() {
 }
 
 function openTab(id) {
-  if (id !== tab) { listPage = 0; listFilter = ""; }
+  if (id !== tab) { listPage = 0; listFilter = ""; listQuery = ""; $("listSearch").value = ""; }
   tab = id;
   current = null;
   listName = LISTS[id] ? id : "";
@@ -557,14 +563,14 @@ function renderUpNextTools(d) {
 function renderUpNext(d) {
   upPage = d.page || 0;
   renderDownloads($("upnextDl"), d.downloads);
-  $("upnextNote").textContent = d.loading ? "Asking Pocket Casts…" : upFilter ? d.total + " of " + plural(d.all, "episode") : plural(d.all, "episode");
+  $("upnextNote").textContent = d.loading ? "Asking Pocket Casts…" : upFilter || upQuery ? d.total + " of " + plural(d.all, "episode") : plural(d.all, "episode");
   renderUpNextTools(d);
   if (d.loading || !d.all) $("upnextFilters").replaceChildren();
   else filters($("upnextFilters"), PC_FILTERS, upFilter, f => { upFilter = f; upPage = 0; refreshNow(); });
   pagers($("upnextPagerTop"), $("upnextPager"), d, n => { upPage = n; });
   const list = $("upnextList");
   list.replaceChildren();
-  if (!d.loading && !d.episodes.length) list.append(el("div", "empty", d.all ? "None of Up Next is here." : "Up Next is empty."));
+  if (!d.loading && !d.episodes.length) list.append(el("div", "empty", upQuery ? "No episode in Up Next is named so." : d.all ? "None of Up Next is here." : "Up Next is empty."));
   for (const e of d.episodes) list.append(pcRow(e));
 }
 
@@ -572,7 +578,7 @@ function renderList(d) {
   listPage = d.page || 0;
   const list = $("listItems");
   list.replaceChildren();
-  $("listNote").textContent = d.error ? d.error : d.loading ? "Asking Pocket Casts…" : listFilter ? d.total + " of " + plural(d.all, "episode") : "";
+  $("listNote").textContent = d.error ? d.error : d.loading ? "Asking Pocket Casts…" : listFilter || listQuery ? d.total + " of " + plural(d.all, "episode") : "";
   if (d.loading || !d.all) $("listFilters").replaceChildren();
   else filters($("listFilters"), PC_FILTERS, listFilter, f => { listFilter = f; listPage = 0; refreshNow(); });
   pagers($("listPagerTop"), $("listPager"), d, n => { listPage = n; });
@@ -585,20 +591,21 @@ function renderList(d) {
 // again and checked by Remove Ads Again, one or all
 function renderOnCard(d) {
   cardPage = d.page || 0;
-  $("oncardNote").textContent = join(plural(d.all, "episode") + " on the Q2", d.notRemoved ? d.notRemoved + " with their ads still in" : "");
+  $("oncardNote").textContent = cardQuery ? d.total + " of " + plural(d.all, "episode") + " on the Q2"
+    : join(plural(d.all, "episode") + " on the Q2", d.notRemoved ? d.notRemoved + " with their ads still in" : "");
   filters($("oncardFilters"), [["", "All"], ["notremoved", "Ads Not Removed (" + d.notRemoved + ")"]], cardFilter,
     f => { cardFilter = f; cardPage = 0; refreshNow(); });
   const tools = $("oncardTools");
   tools.replaceChildren();
-  if (cardFilter === "notremoved" && d.total) tools.append(button("Remove Ads Again for All " + d.total, "", async () => {
-    if (!confirm("Download these " + d.total + " episodes again and remove their ads? Each plays as it is until its new copy is ready.")) return;
-    toast((await api("redoall", {})).message);
+  if ((cardFilter === "notremoved" || cardQuery) && d.total) tools.append(button("Remove Ads Again for All " + d.total, "", async () => {
+    if (!confirm("Download these " + d.total + " episodes again and remove their ads and sponsor reads? Each plays as it is until its new copy is ready.")) return;
+    toast((await api("redoall", {q: cardQuery, filter: cardFilter})).message);
     refresh();
   }));
   pagers($("oncardPagerTop"), $("oncardPager"), d, n => { cardPage = n; });
   const list = $("oncardList");
   list.replaceChildren();
-  if (!d.episodes.length) list.append(el("div", "empty", cardFilter ? "Every episode on the Q2 had its ads removed." : "Nothing on the Q2 yet."));
+  if (!d.episodes.length) list.append(el("div", "empty", cardQuery ? "No episode on the Q2 is named so." : cardFilter ? "Every episode on the Q2 had its ads removed." : "Nothing on the Q2 yet."));
   for (const e of d.episodes) {
     const sub = join(e.show, day(e.date), length(e.duration), size(e.size), e.job ? (e.job.note || jobLine(e.job)) : "");
     list.append(row(e.title, sub, {progress: progress(e.job), cut: e.cut, warn: e.notRemoved, onclick: () => cardSheet(e)}));
@@ -892,9 +899,9 @@ async function refresh() {
   busy = true;
   try {
     if (current) renderShow(await api("show?key=" + encodeURIComponent(current)));
-    else if (tab === "upnext") renderUpNext(await api("pc/upnext?page=" + upPage + "&filter=" + upFilter));
-    else if (tab === "oncard") renderOnCard(await api("oncard?page=" + cardPage + "&filter=" + cardFilter));
-    else if (listName) renderList(await api("pc/list?name=" + listName + "&page=" + listPage + "&filter=" + listFilter));
+    else if (tab === "upnext") renderUpNext(await api("pc/upnext?page=" + upPage + "&filter=" + upFilter + "&q=" + encodeURIComponent(upQuery)));
+    else if (tab === "oncard") renderOnCard(await api("oncard?page=" + cardPage + "&filter=" + cardFilter + "&q=" + encodeURIComponent(cardQuery)));
+    else if (listName) renderList(await api("pc/list?name=" + listName + "&page=" + listPage + "&filter=" + listFilter + "&q=" + encodeURIComponent(listQuery)));
     else if (tab === "podcasts") renderPodcasts(await api("state"));
     else if (tab === "files") renderFiles(await api("pc/files"));
     else if (tab === "discover") await renderDiscover();
@@ -914,6 +921,19 @@ async function boot() {
   $("app").classList.remove("hidden");
   openTab(account.signedIn ? "upnext" : "podcasts");
 }
+
+// A search box: what is typed, a moment after the typing stops, is the list's search, from its
+// first page.
+function searchBox(id, set) {
+  let timer = 0;
+  $(id).addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { set($(id).value.trim()); refreshNow(); }, 300);
+  });
+}
+searchBox("upnextSearch", q => { upQuery = q; upPage = 0; });
+searchBox("oncardSearch", q => { cardQuery = q; cardPage = 0; });
+searchBox("listSearch", q => { listQuery = q; listPage = 0; });
 
 (async () => {
   try { await boot(); } catch (err) { /* api() showed the sign-in */ }

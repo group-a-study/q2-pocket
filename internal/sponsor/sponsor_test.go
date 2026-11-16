@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,5 +189,71 @@ func TestNotesChapters(t *testing.T) {
 		if ch := NotesChapters(s); ch != nil {
 			t.Errorf("%q: %+v", s, ch)
 		}
+	}
+}
+
+func TestMentions(t *testing.T) {
+	// Lex Fridman Podcast #504's YouTube captions
+	vtt := `WEBVTT
+
+00:00:36.280 --> 00:00:41.440
+War on the Rocks platform. Please
+follow and support their work.
+
+00:00:42.480 --> 00:00:46.360
+This is the Lex Fridman Podcast. To support
+it, please check out our sponsors in
+
+00:00:46.400 --> 00:00:49.940
+the description, where you
+can also find links to
+
+00:00:50.000 --> 00:00:53.940
+contact me, ask questions,
+give feedback, and so on.
+
+00:00:54.600 --> 00:00:59.120
+And now, dear friends, here's
+Preston Stewart and Michael Kofman.
+`
+	got := Mentions(Transcript([]byte(vtt), "text/vtt"))
+	if len(got) != 1 {
+		t.Fatalf("got %v", got)
+	}
+	if g := got[0]; g.From < 43.5 || g.From > 44.5 || g.To < 53.8 || g.To > 54.0 {
+		t.Fatalf("got %.2f-%.2f, want about 44-53.9", g.From, g.To)
+	}
+	none := Transcript([]byte("WEBVTT\n\n00:00:01.000 --> 00:00:05.000\nWe talked about how sponsors shape media.\n"), "text/vtt")
+	if m := Mentions(none); len(m) != 0 {
+		t.Fatalf("a talk about sponsors taken for a pointer: %v", m)
+	}
+}
+
+// YouTube's speech recognition of Lex Fridman Podcast #277 (json3: words, no punctuation): its
+// pointers to the sponsors cut to the word, the Emerson quote after the second kept.
+func TestMentionsASR(t *testing.T) {
+	asr := `{"wireMagic":"pb3","events":[
+{"tStartMs":64400,"dDurationMs":5079,"segs":[{"utf8":"friend"},{"utf8":" this","tOffsetMs":1000},{"utf8":" is","tOffsetMs":1200},{"utf8":" leex","tOffsetMs":1400},{"utf8":" Freedman","tOffsetMs":1700},{"utf8":" podcast","tOffsetMs":2200},{"utf8":" to","tOffsetMs":2800}]},
+{"tStartMs":69400,"dDurationMs":20,"aAppend":1,"segs":[{"utf8":"\n"}]},
+{"tStartMs":67479,"dDurationMs":5161,"segs":[{"utf8":"support"},{"utf8":" it","tOffsetMs":300},{"utf8":" please","tOffsetMs":800},{"utf8":" check","tOffsetMs":1000},{"utf8":" out","tOffsetMs":1200},{"utf8":" our","tOffsetMs":1300},{"utf8":" sponsors","tOffsetMs":1500}]},
+{"tStartMs":69479,"dDurationMs":5161,"segs":[{"utf8":"in"},{"utf8":" the","tOffsetMs":200},{"utf8":" description","tOffsetMs":300},{"utf8":" and","tOffsetMs":1600},{"utf8":" now","tOffsetMs":1900},{"utf8":" dear","tOffsetMs":2400},{"utf8":" friends","tOffsetMs":2700}]},
+{"tStartMs":12287520,"dDurationMs":4040,"segs":[{"utf8":"Andrew"},{"utf8":" huberman","tOffsetMs":300},{"utf8":" to","tOffsetMs":1100},{"utf8":" support","tOffsetMs":1300},{"utf8":" this","tOffsetMs":1600},{"utf8":" podcast","tOffsetMs":1800}]},
+{"tStartMs":12289920,"dDurationMs":3680,"segs":[{"utf8":"please"},{"utf8":" check","tOffsetMs":200},{"utf8":" out","tOffsetMs":400},{"utf8":" our","tOffsetMs":500},{"utf8":" sponsors","tOffsetMs":700},{"utf8":" in","tOffsetMs":1300},{"utf8":" the","tOffsetMs":1400}]},
+{"tStartMs":12291560,"dDurationMs":5360,"segs":[{"utf8":"description"},{"utf8":" and","tOffsetMs":1000},{"utf8":" now","tOffsetMs":1200},{"utf8":" let","tOffsetMs":1500},{"utf8":" me","tOffsetMs":1600},{"utf8":" leave","tOffsetMs":1700},{"utf8":" you","tOffsetMs":1900}]},
+{"tStartMs":12293600,"dDurationMs":5040,"segs":[{"utf8":"with"},{"utf8":" some","tOffsetMs":100},{"utf8":" words","tOffsetMs":300},{"utf8":" from","tOffsetMs":700},{"utf8":" Ralph","tOffsetMs":900},{"utf8":" Waldo","tOffsetMs":1500},{"utf8":" Emerson","tOffsetMs":2300}]}]}`
+	lines := Transcript([]byte(asr), "")
+	if len(lines) != 7 || lines[1].Text != "support it please check out our sponsors" {
+		t.Fatalf("lines %+v", lines)
+	}
+	got := Mentions(Words([]byte(asr)))
+	if len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	// "to support it ... description": from "to" (67.2) to "and" (71.08)
+	if g := got[0]; math.Abs(g.From-67.2) > 0.01 || math.Abs(g.To-71.079) > 0.01 {
+		t.Errorf("first %.3f-%.3f", g.From, g.To)
+	}
+	if g := got[1]; math.Abs(g.From-12288.62) > 0.01 || math.Abs(g.To-12292.56) > 0.01 {
+		t.Errorf("second %.3f-%.3f", g.From, g.To)
 	}
 }

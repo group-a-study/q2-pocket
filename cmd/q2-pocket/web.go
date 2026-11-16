@@ -220,10 +220,12 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 	w.a.touch(true)
 	lib := w.a.lib
 	var body struct {
-		URL string `json:"url"`
-		Key string `json:"key"`
-		EID string `json:"eid"`
-		On  bool   `json:"on"`
+		URL    string `json:"url"`
+		Key    string `json:"key"`
+		EID    string `json:"eid"`
+		On     bool   `json:"on"`
+		Q      string `json:"q"`      // redoall: the episodes named so (matchName)
+		Filter string `json:"filter"` // redoall: "notremoved", or "" for all on the Q2
 	}
 	var raw []byte
 	if post {
@@ -278,7 +280,7 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			ej := episodeJSON{EID: e.EID, Title: e.Title, Date: e.Date, Duration: e.Duration, Length: e.Length,
 				OnCard: e.OnCard, Size: e.Size, PC: e.PC, UUID: e.Feed.PC}
 			if r := clean.Load(w.a.opts.dir, e.Key, e.EID); e.OnCard && r != nil {
-				if ads, sp, _ := r.Removed(); ads+sp > 0 {
+				if r.Shown() {
 					ej.Cut = r.Summary()
 				}
 			}
@@ -363,8 +365,12 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		}
 		cardChanged()
 		reply(rw, http.StatusOK, map[string]string{"message": msg})
-	case route == "redoall" && post: // Remove Ads Again for every episode whose ads weren't removed
-		n := w.a.redoAll()
+	case route == "redoall" && post: // Remove Ads Again for every episode the On the Q2 list shows
+		filter := body.Filter
+		if body.Q == "" {
+			filter = "notremoved" // never every episode on the Q2 at once without a search
+		}
+		n := w.a.redoMatching(body.Q, filter)
 		msg := "Removing the ads again from " + plural(n, "episode")
 		if n == 0 {
 			msg = "They're all being downloaded again already"
@@ -376,6 +382,15 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("filter") == "notremoved" {
 			eps, _ = w.a.notRemovedEps()
 		}
+		if q := r.URL.Query().Get("q"); q != "" { // a search: the episodes named so
+			var named []library.EpisodeInfo
+			for _, e := range eps {
+				if matchName(q, e.Title, e.Show) {
+					named = append(named, e)
+				}
+			}
+			eps = named
+		}
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		from, to, at, pages := pageOf(len(eps), page)
 		out := make([]onCardJSON, 0, to-from)
@@ -383,7 +398,7 @@ func (w *web) api(rw http.ResponseWriter, r *http.Request) {
 			o := onCardJSON{Key: e.Key, EID: e.EID, Title: e.Title, Show: e.Show, Date: e.Date, Duration: e.Duration,
 				Size: e.Size, PC: e.PC, UUID: e.Feed.PC, NotRemoved: c.not[e.Key+":"+e.EID]}
 			if r := clean.Load(w.a.opts.dir, e.Key, e.EID); r != nil {
-				if ads, sp, _ := r.Removed(); ads+sp > 0 {
+				if r.Shown() {
 					o.Cut = r.Summary()
 				}
 			}
