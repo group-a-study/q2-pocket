@@ -57,6 +57,9 @@ type Options struct {
 	// switched off) and is not
 	Crashed bool
 	Hold    func() bool // downloads wait while it is true (the app's first sync); nil never
+	// Version is the app's: a download's crashes count against the version they happened in, and a
+	// new version tries it in full again
+	Version string
 	// Replaced: a copy on the card replaced by a new one, cut again (Remove Ads Again), the seconds
 	// of the old copy the new one leaves out (clean.Recut); nil for none
 	Replaced func(path string, cuts [][2]float64)

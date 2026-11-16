@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.11"
+const version = "q2-v1.12"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -199,6 +199,7 @@ func start(o options) (*app, error) {
 		Clean:    cl,
 		Log:      logMem,
 		Crashed:  o.crashed,
+		Version:  version,
 		Hold:     func() bool { return a.sy.holding() },
 		Replaced: func(path string, cuts [][2]float64) { a.replaced(path, cuts) },
 	})
@@ -228,6 +229,13 @@ func start(o options) (*app, error) {
 	})
 	lib.DL.Start()
 	go a.sy.run(ctx)
+	if a.settings().Rechecked < recheckRound { // once: the episodes that went on with their ads
+		go func() {
+			n := a.redoAll()
+			a.change(func(s *settings) { s.Rechecked = recheckRound })
+			logf("Ads Not Removed: %d episodes asked for again, to be checked for ads", n)
+		}()
+	}
 	go func() {
 		lib.Retag(ctx) // episodes an older version left untagged, with the art the feeds had
 		for first := true; ; first = false {

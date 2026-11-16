@@ -19,6 +19,7 @@ const (
 	WhyEnd    = "added after the episode"
 	WhyLength = "the feed's length"
 	WhyOpens  = "the transcript opens with a sponsor"
+	WhyEmpty  = "an empty ad slot: no advert in it, a moment of silence"
 )
 
 const (
@@ -28,6 +29,8 @@ const (
 	budgetTol = 3.0   // seconds the feed's length may be out by
 	learnMin  = 5.0   // seconds: adverts kept in the library are this long...
 	learnMax  = 150.0 // ...to this
+	emptyMax  = 4.0   // seconds: a cut this short that is mostly digital silence is an empty ad slot
+	silentMin = 0.5   // seconds of digital silence that may be an empty ad slot (Result.Silences)
 )
 
 // Evidence is what Detect weighs besides the stream.
@@ -51,6 +54,9 @@ type Result struct {
 	Cuts  []Cut
 	Learn [][]uint32 // adverts for the library (folded hashes), the other copy's among them
 	Parts int        // how many stitched parts the episode is in
+	// Silences is the stream's digital silences of silentMin or more, where a host may have left an
+	// ad slot empty (a transcript of another copy may have an advert there: sponsor.Place)
+	Silences []Span
 }
 
 // Detect finds the adverts stitched into s.
@@ -181,7 +187,13 @@ func Detect(s *mp3.Stream, ev Evidence) Result {
 			cuts = union(append(cuts, Cut{p.From, p.To, WhyLength}))
 		}
 	}
+	for i, c := range cuts { // a moment of silence where the copies differ: a slot with no advert
+		if secs(c.To-c.From) <= emptyMax && silentShare(h, c.From, c.To) >= 0.5 {
+			cuts[i].Why = WhyEmpty
+		}
+	}
 	res.Cuts = cuts
+	res.Silences = Silences(h, frames(silentMin))
 	for _, c := range cuts {
 		if d := secs(c.To - c.From); d >= learnMin && d <= learnMax && c.Why != WhyHeard {
 			res.Learn = append(res.Learn, h[c.From:c.To])
@@ -285,6 +297,48 @@ func Ranges(cuts []Cut) []mp3.Range {
 	out := make([]mp3.Range, len(cuts))
 	for i, c := range cuts {
 		out[i] = mp3.Range{From: c.From, To: c.To}
+	}
+	return out
+}
+
+// silent is whether frame i of h is digital silence: the same frame as its neighbour, or as the one
+// after next (an encoder makes zeros into one frame over and over, a padded one now and then).
+func silent(h []uint32, i int) bool {
+	n := len(h)
+	return i > 0 && h[i] == h[i-1] || i+1 < n && h[i] == h[i+1] || i > 0 && i+1 < n && h[i-1] == h[i+1]
+}
+
+// silentShare is how much of frames [from, to) is digital silence.
+func silentShare(h []uint32, from, to int) float64 {
+	if to <= from {
+		return 0
+	}
+	n := 0
+	for i := from; i < to; i++ {
+		if silent(h, i) {
+			n++
+		}
+	}
+	return float64(n) / float64(to-from)
+}
+
+// Silences is h's stretches of digital silence at least min frames long. A host leaves an ad slot it
+// had no advert for as one (Megaphone: a second and a half of it, the user's, 2026-11-16).
+func Silences(h []uint32, min int) []Span {
+	var out []Span
+	for i := 0; i < len(h); {
+		if !silent(h, i) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(h) && silent(h, j) {
+			j++
+		}
+		if j-i >= min {
+			out = append(out, Span{i, j})
+		}
+		i = j
 	}
 	return out
 }

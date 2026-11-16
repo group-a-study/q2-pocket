@@ -28,11 +28,18 @@ type settings struct {
 	DeletePlayed bool `json:"delete_played"`
 	TwoWay       bool `json:"sync_two_way"`     // the sync sends the Q2's places, played episodes and what plays too
 	Version      int  `json:"settings_version"` // settingsVersion once loadSettings has brought it up to date
+	// Rechecked is the last recheckRound done: the episodes on the Q2 with their ads asked for again
+	Rechecked int `json:"rechecked,omitempty"`
 
 	YouTubeKey    string `json:"youtube_api_key,omitempty"`
 	SpotifyID     string `json:"spotify_client_id,omitempty"`
 	SpotifySecret string `json:"spotify_client_secret,omitempty"`
 }
+
+// recheckRound is the round of Remove Ads Again a start asks for once, for every episode on the Q2
+// marked Ads Not Removed: 1 (v1.12, the user's, 2026-11-16) for those that went on uncut after
+// crashing v1.10, which lacked the memory to check them; v1.12 has it.
+const recheckRound = 1
 
 // upNextFirst is how many of Up Next's episodes are kept downloaded unless chosen otherwise; Download
 // All on the Up Next page fetches the rest once.

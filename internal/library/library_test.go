@@ -151,10 +151,13 @@ func newFake(t *testing.T) *fake {
 func open(t *testing.T, dir string) *Library { return openWith(t, dir, false) }
 
 // openWith opens the library as a start after a crash (crashed) or not.
-func openWith(t *testing.T, dir string, crashed bool) *Library {
+func openWith(t *testing.T, dir string, crashed bool) *Library { return openAs(t, dir, crashed, "") }
+
+// openAs is openWith as version of the app.
+func openAs(t *testing.T, dir string, crashed bool, version string) *Library {
 	l, err := Open(Options{Dir: filepath.Join(dir, ".podcasts"), Root: filepath.Join(dir, "Podcasts"),
 		Client: &http.Client{Timeout: 5 * time.Second}, Fetch: &http.Client{}, Agent: "test", Ready: func() bool { return true },
-		Crashed: crashed})
+		Crashed: crashed, Version: version})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -841,6 +844,46 @@ func TestCrashedDownloadGoesLast(t *testing.T) {
 	l = openWith(t, dir, true)
 	if j, _, _ := l.DL.next(); j == nil || j.EID != eps[1].EID {
 		t.Fatalf("the next one first: %+v", j)
+	}
+}
+
+// A download the app crashed in is checked for ads in full again; only a second crash in the same
+// version of the app leaves its ad check out (it goes on marked Ads Not Removed). A new version of
+// the app tries it afresh: in full, its count of tries and crashes started over, and one the old
+// version gave up on for its crashes waits again (the user's, 2026-11-16: episodes that had crashed
+// v1.10 went on uncut under v1.11, which had the memory to check them).
+func TestCrashedDownloadIsCheckedAgain(t *testing.T) {
+	f, dir := newFake(t), t.TempDir()
+	l := openAs(t, dir, false, "v1")
+	si, _ := l.Subscribe(context.Background(), f.URL+"/feed.xml")
+	eps, _ := l.Episodes(si.Key)
+	id := si.Key + ":" + eps[0].EID
+	l.DL.Queue(si.Key, eps[0].EID)
+	plain := func(l *Library) bool { _, p := l.plain.Load(id); return p }
+	l.DL.next()
+	l = openAs(t, dir, true, "v1")
+	if plain(l) || l.DL.jobs[0].crashes != 1 {
+		t.Fatalf("one crash: checked again, %+v", l.DL.jobs[0])
+	}
+	l.DL.next()
+	l = openAs(t, dir, true, "v1")
+	if !plain(l) || l.DL.jobs[0].crashes != 2 {
+		t.Fatalf("a second crash: not checked, %+v", l.DL.jobs[0])
+	}
+	l = openAs(t, dir, false, "v2")
+	if j := l.DL.jobs[0]; plain(l) || j.crashes != 0 || j.tries != 0 {
+		t.Fatalf("a new version: in full, counts started over, %+v", j)
+	}
+	for start := 1; start <= tries; start++ { // v2 crashes on it every try: failed
+		l.DL.next()
+		l = openAs(t, dir, true, "v2")
+	}
+	if ji := l.DL.Job(si.Key, eps[0].EID); ji.State != Failed || ji.Err != crashed {
+		t.Fatalf("failed: %+v", ji)
+	}
+	l = openAs(t, dir, false, "v3")
+	if ji := l.DL.Job(si.Key, eps[0].EID); ji.State != Waiting || ji.Err != "" || plain(l) {
+		t.Fatalf("v3 tries it again: %+v", ji)
 	}
 }
 

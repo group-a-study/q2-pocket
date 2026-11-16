@@ -82,7 +82,7 @@ type notesAt struct {
 type Cut struct {
 	From float64 `json:"from"`
 	To   float64 `json:"to"`
-	Kind string  `json:"kind"` // "ad" or "sponsor"
+	Kind string  `json:"kind"` // "ad", "sponsor", or "slot" (an empty ad slot: silence)
 	Why  string  `json:"why"`
 }
 
@@ -226,6 +226,7 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 	rep.Sources = append(rep.Sources, src.used...)
 
 	var dai []adfree.Cut
+	var slots []sponsor.Slot // where the host put adverts in, or left a slot empty: sponsor.Place
 	if set.Ads {
 		ev := adfree.Evidence{Opens: src.opens, Now: time.Now()}
 		if e.Duration > 0 {
@@ -253,6 +254,12 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		res := adfree.Detect(s, ev)
 		c.logf("%q: %d ads found in %d parts", e.Title, len(res.Cuts), res.Parts)
 		dai = res.Cuts
+		for _, k := range dai {
+			slots = append(slots, sponsor.Slot{From: s.At(k.From), To: s.At(k.To), Ad: k.Why != adfree.WhyEmpty})
+		}
+		for _, sp := range res.Silences {
+			slots = append(slots, sponsor.Slot{From: s.At(sp.From), To: s.At(sp.To)})
+		}
 		lib.Learn(res.Learn, ev.Now)
 		lib.Save()
 	}
@@ -264,9 +271,10 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		kept -= s.Seconds(k.From, k.To)
 	}
 	var spon []Cut
+	var placed *sponsor.Placed // the transcript, lined up through the ad slots when its length differs
 	if set.Sponsors {
 		note("Looking for sponsor reads")
-		spon = c.sponsors(ctx, s, e, set, src, dai, kept, original, rep, part)
+		spon, placed = c.sponsors(ctx, s, e, set, src, dai, slots, kept, original, rep, part)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -274,7 +282,11 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 
 	// all of it, as seconds of the download and then as its frames
 	for _, k := range dai {
-		rep.Cuts = append(rep.Cuts, Cut{s.At(k.From), s.At(k.To), "ad", k.Why})
+		kind := "ad"
+		if k.Why == adfree.WhyEmpty {
+			kind = "slot"
+		}
+		rep.Cuts = append(rep.Cuts, Cut{s.At(k.From), s.At(k.To), kind, k.Why})
 	}
 	rep.Cuts = union(append(rep.Cuts, spon...))
 	var ranges []mp3.Range
@@ -282,16 +294,23 @@ func (c *Cleaner) Clean(ctx context.Context, part string, e Episode, note func(s
 		ranges = append(ranges, mp3.Range{From: s.FrameAt(k.From), To: s.FrameAt(k.To)})
 	}
 	if len(src.cues) > 0 { // its transcript, moved with the audio: as downloaded, or as cut of its adverts
-		dl := func(t float64) float64 { return t }
+		dl := func(t float64) (float64, bool) { return t, true }
 		switch sponsor.Fit(sponsor.End(src.cues), kept, original, true) {
 		case sponsor.Clean:
-			dl = inDownload(s, dai)
+			in := inDownload(s, dai)
+			dl = func(t float64) (float64, bool) { return in(t), true }
 		case sponsor.Unplaced:
 			dl = nil
+			if placed != nil { // made from a copy with other adverts: lined up through the slots
+				dl = placed.At
+			}
 		}
 		if dl != nil {
 			keepTranscript(e.Path, src.cues, func(t float64) (float64, bool) {
-				t = dl(t)
+				t, ok := dl(t)
+				if !ok { // an advert only the transcript's copy has
+					return 0, false
+				}
 				for _, k := range rep.Cuts {
 					if t >= k.From && t < k.To {
 						return 0, false
@@ -457,7 +476,7 @@ func (c *Cleaner) Backfill(ctx context.Context, e Episode) bool {
 	adSec := 0.0
 	if rep != nil {
 		for _, k := range rep.Cuts {
-			if k.Kind == "ad" {
+			if k.stitched() {
 				ads = append(ads, k)
 				adSec += k.To - k.From
 			}
@@ -651,13 +670,13 @@ func Recut(old, now *Report) [][2]float64 {
 	reads := func(r *Report) [][2]float64 { // its sponsor reads, in the episode without its adverts
 		ads := &Report{}
 		for _, k := range r.Cuts {
-			if k.Kind == "ad" {
+			if k.stitched() {
 				ads.Cuts = append(ads.Cuts, k)
 			}
 		}
 		var out [][2]float64
 		for _, k := range r.Cuts {
-			if f, t := ads.Kept(k.From), ads.Kept(k.To); k.Kind != "ad" && t > f {
+			if f, t := ads.Kept(k.From), ads.Kept(k.To); !k.stitched() && t > f {
 				out = append(out, [2]float64{f, t})
 			}
 		}
@@ -695,21 +714,41 @@ func Recut(old, now *Report) [][2]float64 {
 	return out
 }
 
-// Removed is how many adverts and sponsor reads were cut, and their seconds.
+// Removed is how many adverts and sponsor reads were cut, and their seconds (empty ad slots'
+// among them, not counted as adverts: Slots).
 func (r *Report) Removed() (ads, sponsors int, sec float64) {
 	if r == nil {
 		return 0, 0, 0
 	}
 	for _, k := range r.Cuts {
-		if k.Kind == "ad" {
+		switch k.Kind {
+		case "ad":
 			ads++
-		} else {
+		case "slot":
+		default:
 			sponsors++
 		}
 		sec += k.To - k.From
 	}
 	return
 }
+
+// Slots is how many empty ad slots were cut: a moment of silence where the host had no advert.
+func (r *Report) Slots() int {
+	n := 0
+	if r != nil {
+		for _, k := range r.Cuts {
+			if k.Kind == "slot" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// stitched is whether a cut is one the host stitched in (an advert, or an empty slot): the cut
+// episode's timeline leaves these out, and sponsor reads are timed on it.
+func (k Cut) stitched() bool { return k.Kind == "ad" || k.Kind == "slot" }
 
 // Summary is the report in a few words, for an episode's row: "4 ads and 1 sponsor read cut (3
 // min)", "No ads found", or why it wasn't checked.
@@ -729,6 +768,9 @@ func (r *Report) Summary() string {
 		parts = append(parts, plural(sp, "sponsor read"))
 	}
 	if len(parts) == 0 {
+		if n := r.Slots(); n > 0 { // no advert in them: not counted as one
+			return "No ads found (" + plural(n, "empty ad slot") + " cut)"
+		}
 		return "No ads found"
 	}
 	m := int(math.Round(sec / 60))
@@ -957,7 +999,7 @@ func (c *Cleaner) episodeNotes(ctx context.Context, podcast, uuid string) (pocke
 // Spotify episode and YouTube video, its chapters named as adverts, and the reads its transcript
 // has, each used only when its timeline is the episode's (cut or not).
 func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Settings, src found, dai []adfree.Cut,
-	kept, original float64, rep *Report, part string) []Cut {
+	slots []sponsor.Slot, kept, original float64, rep *Report, part string) ([]Cut, *sponsor.Placed) {
 	orig := inDownload(s, dai)
 	var out []Cut
 	add := func(segs []sponsor.Segment, timeline int) bool {
@@ -1076,9 +1118,19 @@ func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Se
 			rep.Sources = append(rep.Sources, "its show notes' timestamps")
 		}
 	}
-	// the transcript's reads
+	// the transcript's reads: on the download's timeline or the cut one's; or, made from a copy the
+	// host put other adverts in (Pocket Casts' own transcripts are), lined up through the ad slots
+	var placed *sponsor.Placed
 	if len(src.cues) > 0 {
-		add(sponsor.Reads(src.cues), sponsor.Fit(sponsor.End(src.cues), kept, original, true))
+		if fit := sponsor.Fit(sponsor.End(src.cues), kept, original, true); fit != sponsor.Unplaced {
+			add(sponsor.Reads(src.cues), fit)
+		} else if placed = sponsor.Place(src.cues, slots, original); placed != nil {
+			add(placed.Reads, sponsor.Original)
+			rep.Sources = append(rep.Sources, fmt.Sprintf("the transcript lined up through %s (its copy had other adverts)",
+				plural(placed.Slots, "ad slot")))
+		} else {
+			rep.Sources = append(rep.Sources, "the transcript: made from a copy with other adverts, and it couldn't be lined up")
+		}
 	}
 	// a source gone wrong shouldn't take a quarter of the episode
 	total := 0.0
@@ -1088,7 +1140,7 @@ func (c *Cleaner) sponsors(ctx context.Context, s *mp3.Stream, e Episode, set Se
 	}
 	if total > maxSponsorShare*kept {
 		rep.Sources = append(rep.Sources, "sponsor segments left: they came to too much of the episode")
-		return nil
+		return nil, placed
 	}
-	return out
+	return out, placed
 }

@@ -24,12 +24,13 @@ import (
 )
 
 const (
-	chunk    = 512 << 10        // written to the card at a time, each opened, synced and closed
-	stallFor = 60 * time.Second // no bytes this long: the transfer is given up and tried again
-	reserve  = 32 << 20         // the card keeps this much free
-	tries    = 4                // a download that fails this often (but for the network) is failed
-	idleWait = 30 * time.Second
-	renewAge = 5 * time.Minute // a feed older than this is fetched again for a refused episode's address
+	chunk      = 512 << 10        // written to the card at a time, each opened, synced and closed
+	stallFor   = 60 * time.Second // no bytes this long: the transfer is given up and tried again
+	reserve    = 32 << 20         // the card keeps this much free
+	tries      = 4                // a download that fails this often (but for the network) is failed
+	plainAfter = 2                // crashes in a download before its ad check is left out (see job.crashes)
+	idleWait   = 30 * time.Second
+	renewAge   = 5 * time.Minute // a feed older than this is fetched again for a refused episode's address
 )
 
 // retryAfter is the wait before a failed download's second try, doubling each time; tests shorten it.
@@ -55,6 +56,7 @@ type JobInfo struct {
 type job struct {
 	JobInfo
 	tries     int // starts so far, kept in queue.json: one the app crashed in counts too
+	crashes   int // starts the app crashed in, this version of it
 	notBefore time.Time
 	discard   bool // cancelled: its .part goes too
 	redo      bool // on the card already: fetched again to be checked for ads again (Redo)
@@ -69,11 +71,19 @@ type queued struct {
 	Started  bool   `json:",omitempty"` // under way as the queue was last written
 	Plain    bool   `json:",omitempty"` // the app crashed in it: not checked for ads again (Library.plain)
 	Redo     bool   `json:",omitempty"` // on the card already, fetched again (Downloader.Redo)
+	Crashes  int    `json:",omitempty"` // starts the app crashed in
+	Version  string `json:",omitempty"` // the app's version that wrote it: a new one tries anew
 }
 
 // crashed is the failure of a download the app crashed in on each of its tries (out of memory, say,
 // or a broken file): it is skipped, so the next one goes.
 const crashed = "Pocket crashed on it each try: skipped"
+
+// plainAfter is how many times the app may crash in a download, this version of it, before the
+// download goes on without the ad check (the part that takes the most memory), marked Ads Not
+// Removed. The first crash may have been the app's other work at the same moment: the second
+// try is checked in full again (the user's, 2026-11-16: ad removal first; five episodes that
+// had crashed v1.10, which lacked the memory, went on uncut under v1.11, which had it).
 
 // Downloader fetches episodes onto the card one at a time, in the order asked.
 type Downloader struct {
@@ -100,8 +110,17 @@ func newDownloader(l *Library) *Downloader {
 			continue
 		}
 		j := &job{JobInfo: JobInfo{Key: s.Key, EID: s.EID, Show: e.Show, Title: e.Title, Size: e.Length, Err: s.Err},
-			tries: s.Tries, redo: s.Redo}
-		if s.Plain || s.Started && l.o.Crashed {
+			tries: s.Tries, redo: s.Redo, crashes: s.Crashes}
+		if s.Version != l.o.Version { // another version of the app wrote it: its crashes were that one's
+			j.tries, j.crashes, s.Plain = 0, 0, false
+			if s.Failed && s.Err == crashed {
+				s.Failed, j.Err = false, ""
+			}
+		}
+		if s.Started && l.o.Crashed {
+			j.crashes++
+		}
+		if s.Plain || j.crashes >= plainAfter {
 			l.plain.Store(s.Key+":"+s.EID, true)
 		}
 		switch {
@@ -112,9 +131,15 @@ func newDownloader(l *Library) *Downloader {
 		case s.Started && j.tries >= tries:
 			j.State, j.Err = Failed, crashed
 			l.logf("download %q of %s: Pocket crashed on it each of %d tries: skipped", e.Title, e.Show, j.tries)
+		case s.Started && j.crashes >= plainAfter:
+			j.Err = "Pocket crashed on it again: trying again after the others, without the ad check"
+			l.logf("download %q of %s: Pocket crashed on it again (try %d of %d): it goes after the others, not checked for ads",
+				e.Title, e.Show, j.tries, tries)
+			last = append(last, j)
+			continue
 		case s.Started:
-			j.Err = "Pocket crashed on it: trying again after the others, without the ad check"
-			l.logf("download %q of %s: Pocket crashed on it (try %d of %d): it goes after the others, not checked for ads",
+			j.Err = "Pocket crashed on it: trying again after the others"
+			l.logf("download %q of %s: Pocket crashed on it (try %d of %d): it goes after the others, checked for ads again",
 				e.Title, e.Show, j.tries, tries)
 			last = append(last, j)
 			continue
@@ -133,7 +158,8 @@ func (d *Downloader) save() {
 	for _, j := range d.jobs {
 		if !j.discard {
 			_, plain := d.l.plain.Load(j.Key + ":" + j.EID)
-			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active, plain, j.redo})
+			out = append(out, queued{j.Key, j.EID, j.State == Failed, j.Err, j.tries, j.State == Active, plain, j.redo,
+				j.crashes, d.l.o.Version})
 		}
 	}
 	b, _ := json.Marshal(out)

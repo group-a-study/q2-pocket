@@ -437,7 +437,7 @@ async function report(key, eid, title) {
     const t = el("table", "cuts");
     for (const c of r.cuts) {
       const tr = el("tr");
-      tr.append(el("td", "", clock(c.from) + "–" + clock(c.to)), el("td", "", c.kind === "ad" ? "Ad" : "Sponsor"), el("td", "muted", c.why));
+      tr.append(el("td", "", clock(c.from) + "–" + clock(c.to)), el("td", "", c.kind === "ad" ? "Ad" : c.kind === "slot" ? "Empty ad slot" : "Sponsor"), el("td", "muted", c.why));
       t.append(tr);
     }
     p.append(t);
