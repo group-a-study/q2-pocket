@@ -957,3 +957,25 @@ func TestRetagWithoutRoom(t *testing.T) {
 		t.Fatal("not tagged where it is", err)
 	}
 }
+
+// Chartable's links (closed in 2024) are passed over to the address behind them; other links stay.
+func TestUntracked(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://chrt.fm/track/4EB79A/pscrb.fm/rss/p/https://s.gum.fm/s-1/traffic.megaphone.fm/TIF1.mp3?updated=1": "https://pscrb.fm/rss/p/https://s.gum.fm/s-1/traffic.megaphone.fm/TIF1.mp3?updated=1",
+		"https://www.chtbl.com/track/5899E/traffic.omny.fm/d/clips/a.mp3":                                          "https://traffic.omny.fm/d/clips/a.mp3",
+		"http://chtbl.com/track/X/chrt.fm/track/Y/https://host.example/b.mp3":                                      "https://host.example/b.mp3",
+		"https://pdst.fm/e/traffic.megaphone.fm/C.mp3":                                                             "https://pdst.fm/e/traffic.megaphone.fm/C.mp3",
+		"https://chrt.fm/track/ONLY":                                                                               "https://chrt.fm/track/ONLY",
+	} {
+		if got := untracked(in); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestUntrackedBlubrry(t *testing.T) {
+	in := "https://media.rawvoice.com/lse_publicLecturesAndEvents/richmedia.lse.ac.uk/publiclecturesandevents/20251211_1830_SustainableSupplyChain.mp3"
+	if got := untracked(in); got != "https://richmedia.lse.ac.uk/publiclecturesandevents/20251211_1830_SustainableSupplyChain.mp3" {
+		t.Error(got)
+	}
+}

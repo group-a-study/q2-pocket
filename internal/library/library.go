@@ -950,8 +950,8 @@ func (l *Library) refresh(ctx context.Context, key string, full bool) error {
 					fresh = append(fresh, EpisodeID(e.GUID))
 				}
 			}
-			for _, e := range prev.Episodes { // ones the feed has dropped, kept
-				if !seen[e.GUID] && len(nc.Episodes) < MaxEpisodes {
+			for _, e := range prev.Episodes { // ones the feed has dropped, kept (those added from the account always)
+				if !seen[e.GUID] && (len(nc.Episodes) < MaxEpisodes || e.Extra) {
 					nc.Episodes = append(nc.Episodes, e)
 				}
 			}

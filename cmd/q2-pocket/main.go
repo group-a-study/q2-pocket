@@ -31,7 +31,7 @@ import (
 	"q2-pocket/internal/tlsroots"
 )
 
-const version = "q2-v1.12"
+const version = "q2-v1.13"
 
 const (
 	staleAfter   = 30 * time.Minute // a show's feed older than this is fetched again when Podcasts starts
@@ -86,13 +86,15 @@ type app struct {
 	placesAt time.Time
 	sleepSet int // the Sleep Timer's minutes as last chosen, for its page's Selected
 
-	pending  sync.Mutex          // the pages' own: getting, lists, fileJobs
-	getting  map[string]bool     // Pocket Casts episodes whose show is being added to download them
-	lists    map[string]cached   // Discover's lists, by name
-	fileJobs map[string]*fileJob // uploaded files downloading
-	fileMu   sync.Mutex          // one file at a time
-	quit     chan struct{}
-	once     sync.Once
+	pending sync.Mutex      // the pages' own: getting, lists, fileJobs
+	getting map[string]bool // Pocket Casts episodes whose show is being added to download them
+	// getFailed: Pocket Casts episodes a press couldn't download, why (their rows say it)
+	getFailed map[string]string
+	lists     map[string]cached   // Discover's lists, by name
+	fileJobs  map[string]*fileJob // uploaded files downloading
+	fileMu    sync.Mutex          // one file at a time
+	quit      chan struct{}
+	once      sync.Once
 }
 
 func main() {

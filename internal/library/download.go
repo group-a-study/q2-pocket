@@ -591,8 +591,11 @@ func (l *Library) download(ctx context.Context, j *job, progress func(done, size
 	var no refused
 	if errors.As(err, &no) {
 		if fresh := l.renewSource(ctx, j.Key, j.EID, u); fresh != "" {
-			err = l.transfer(ctx, fresh, e, l.partPath(j.Key, j.EID), progress, note)
+			u, err = fresh, l.transfer(ctx, fresh, e, l.partPath(j.Key, j.EID), progress, note)
 		}
+	}
+	if bare := untracked(u); err != nil && ctx.Err() == nil && bare != u { // Chartable's link gone: past it
+		err = l.transfer(ctx, bare, e, l.partPath(j.Key, j.EID), progress, note)
 	}
 	if errors.As(err, &no) {
 		return permanent{err}
@@ -791,4 +794,34 @@ func contentRange(h string) (start, total int64) {
 		}
 	}
 	return start, total
+}
+
+// untracked is u without a measuring link that no longer works in front of the address it passes on
+// to, u when it has none: Chartable's (https://chtbl.com/track/<id>/<address>, chrt.fm), closed in
+// 2024, its links no longer answering; and Blubrry's (https://media.rawvoice.com/<show>/<address>),
+// whose certificate is another site's, so a secure fetch fails. The address behind one often still
+// works (the user's, 2026-11-16: of the episodes in Up Next that wouldn't download, an old one
+// behind Chartable and twelve of LSE's lectures behind Blubrry).
+func untracked(u string) string {
+	for _, p := range []string{"chtbl.com/track/", "chrt.fm/track/", "media.rawvoice.com/"} {
+		rest := u
+		for _, scheme := range []string{"https://", "http://"} {
+			rest = strings.TrimPrefix(rest, scheme)
+		}
+		rest = strings.TrimPrefix(rest, "www.")
+		if !strings.HasPrefix(rest, p) {
+			continue
+		}
+		rest = rest[len(p):]
+		i := strings.IndexByte(rest, '/')
+		if i < 0 || i == len(rest)-1 {
+			return u
+		}
+		rest = rest[i+1:]
+		if !strings.HasPrefix(rest, "http://") && !strings.HasPrefix(rest, "https://") {
+			rest = "https://" + rest
+		}
+		return untracked(rest)
+	}
+	return u
 }

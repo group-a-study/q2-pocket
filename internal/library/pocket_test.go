@@ -181,3 +181,62 @@ func TestAdopted(t *testing.T) {
 		t.Errorf("%+v", eps)
 	}
 }
+
+// An episode of the account (Up Next) that its show's list lacks (dropped from its feed, or
+// published again under a new id) is added from the account's copy, its address and all, and stays
+// when the show is fetched again; one with no audio isn't.
+func TestAddPC(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cache/podcast/full/"+podUUID {
+			json.NewEncoder(w).Encode(map[string]any{"podcast": map[string]any{"uuid": podUUID, "title": "The Idiot",
+				"episodes": []map[string]any{{"uuid": epUUID, "title": "Chapter 5", "url": "https://x.example/new5.mp3",
+					"file_type": "audio/mpeg", "published": "2026-03-26T02:05:00Z"}}}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	old := pocketcasts.Cache
+	pocketcasts.Cache = srv.URL + "/cache"
+	t.Cleanup(func() { pocketcasts.Cache = old })
+	dir := t.TempDir()
+	pc := pocketcasts.New(srv.Client(), "test", pocketcasts.Token{})
+	l, err := Open(Options{Dir: filepath.Join(dir, ".pocket"), Root: filepath.Join(dir, "Podcasts"), Client: srv.Client(),
+		Fetch: srv.Client(), Agent: "test", Ready: func() bool { return false }, PC: pc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.DL.Stop)
+	si := l.AdoptPC(pocketcasts.Podcast{UUID: podUUID, Title: "The Idiot"}, true)
+	if err := l.Refresh(context.Background(), si.Key); err != nil {
+		t.Fatal(err)
+	}
+	oldID := "9fef8f10-b055-4ecd-b734-ae9947b08f38" // Up Next's: the chapter before it was published again
+	up := pocketcasts.Episode{UUID: oldID, Podcast: podUUID, Title: "Chapter 5", URL: "https://x.example/old5.mp3",
+		FileType: "audio/mpeg", Published: "2026-03-26T02:05:00Z"}
+	if _, err := l.PCEpisode(podUUID, oldID); err == nil {
+		t.Fatal("not in the show's list yet")
+	}
+	e, err := l.AddPC(up)
+	if err != nil || e.Feed.URL != up.URL || !e.Feed.Extra || e.Feed.PC != oldID {
+		t.Fatalf("%+v %v", e, err)
+	}
+	if again, err := l.AddPC(up); err != nil || again.EID != e.EID {
+		t.Fatal("added once", again, err)
+	}
+	l.mu.Lock()
+	l.find(si.Key).c.ETag = "" // fetched again in full
+	l.mu.Unlock()
+	if err := l.Refresh(context.Background(), si.Key); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := l.PCEpisode(podUUID, oldID); err != nil || got.EID != e.EID || got.Path == e.Path && got.Path == "" {
+		t.Fatalf("kept on a refresh: %+v %v", got, err)
+	}
+	if newer, _ := l.PCEpisode(podUUID, epUUID); newer.Path == e.Path {
+		t.Error("the show's own Chapter 5 and Up Next's share a file name")
+	}
+	if _, err := l.AddPC(pocketcasts.Episode{UUID: "u2", Podcast: podUUID, Title: "Video", URL: "https://x.example/v.mp4", FileType: "video/mp4"}); err == nil {
+		t.Error("no audio: not added")
+	}
+}

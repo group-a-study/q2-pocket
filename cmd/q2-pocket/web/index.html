@@ -359,13 +359,15 @@ function pcLine(e) {
   if (e.onCard && e.job) return join(when, "On the Q2", e.job.note || jobLine(e.job)); // Remove Ads Again under way
   if (e.onCard) return join(when, "On the Q2");
   if (e.job) return join(when, jobLine(e.job));
+  if (e.getting) return join(when, "Getting it ready…");
+  if (e.getFailed) return join(when, "Couldn't download: " + e.getFailed);
   return when;
 }
 
 function pcRow(e) {
   const btns = [];
-  if (e.job && e.job.state === "failed") btns.push(button("Retry", "quiet", () => act(e, "download")));
-  else if (!e.onCard && !e.job) btns.push(button("Get", "quiet", () => act(e, "download")));
+  if (e.job && e.job.state === "failed" || e.getFailed && !e.job && !e.onCard) btns.push(button("Retry", "quiet", () => act(e, "download")));
+  else if (!e.onCard && !e.job && !e.getting) btns.push(button("Get", "quiet", () => act(e, "download")));
   btns.push(button(e.starred ? "★" : "☆", "icon", () => act(e, e.starred ? "unstar" : "star")));
   return row(e.title, pcLine(e), {progress: progress(e.job), cut: e.cut, warn: e.notRemoved, buttons: btns, onclick: () => sheet(e)});
 }
@@ -384,11 +386,11 @@ function sheet(e) {
   if (e.notRemoved) p.append(el("div", "warn", e.notRemoved));
   const add = (label, cls, fn) => p.append(button(label, cls, fn));
   // a failed download, fetched again on a press (the user's, 2026-11-16)
-  if (e.job && e.job.state === "failed") add("Download Again", "", () => act(e, "download"));
+  if (e.job && e.job.state === "failed" || e.getFailed && !e.job && !e.onCard) add("Download Again", "", () => act(e, "download"));
   if (e.notRemoved && e.key) add("Remove Ads Again", "", () => redo(e.key, e.eid));
   if (e.upNext) add("Remove from Up Next", "quiet", () => act(e, "remove"));
   else { add("Play Next", "", () => act(e, "next")); add("Play Last", "quiet", () => act(e, "last")); }
-  if (!e.onCard && !e.job) add("Download to the Q2", "quiet", () => act(e, "download"));
+  if (!e.onCard && !e.job && !e.getting && !e.getFailed) add("Download to the Q2", "quiet", () => act(e, "download"));
   add(e.starred ? "Take the Star Away" : "Star", "quiet", () => act(e, e.starred ? "unstar" : "star"));
   add(e.status === 3 ? "Mark Unplayed" : "Mark Played", "quiet", () => act(e, e.status === 3 ? "unplayed" : "played"));
   if (e.onCard && e.key) add("What Was Cut", "quiet", () => report(e.key, e.eid, e.title));
@@ -463,28 +465,31 @@ function filters(box, list, current, pick) {
 }
 
 // pager is a page's Previous and Next and a jump to any page (the user's, 2026-11-16: Up Next's
-// 1,372 episodes were cut at 200), left alone while its page list is open
+// 1,372 episodes were cut at 200). It is updated in place, so the two pagers of a list always agree
+// (the user's: picked from the top one's list, the last page kept the top one's Next lit, as its
+// list still had the focus and was left alone), and its list isn't rebuilt while it is open.
 function pager(box, d, go) {
-  if (box.contains(document.activeElement) && document.activeElement.tagName === "SELECT") return;
-  box.replaceChildren();
-  if (!d.pages || d.pages < 2) return;
-  const prev = el("button", "quiet", "‹ Prev"), next = el("button", "quiet", "Next ›");
-  prev.disabled = d.page <= 0;
-  next.disabled = d.page >= d.pages - 1;
-  prev.onclick = () => go(d.page - 1);
-  next.onclick = () => go(d.page + 1);
-  const where = el("div", "where"), pick = el("select");
-  pick.setAttribute("aria-label", "Page");
-  for (let i = 0; i < d.pages; i++) {
-    const from = i * d.perPage + 1, to = Math.min((i + 1) * d.perPage, d.total);
-    const o = el("option", "", (i + 1) + " of " + d.pages + " · " + from + "–" + to);
-    o.value = i;
-    if (i === d.page) o.selected = true;
-    pick.append(o);
+  if (!d.pages || d.pages < 2) { box.replaceChildren(); box.pager = null; return; }
+  let p = box.pager;
+  if (!p || p.pages !== d.pages || p.total !== d.total || !box.contains(p.pick)) {
+    p = box.pager = {pages: d.pages, total: d.total, prev: el("button", "quiet", "‹ Prev"), next: el("button", "quiet", "Next ›"), pick: el("select")};
+    p.pick.setAttribute("aria-label", "Page");
+    for (let i = 0; i < d.pages; i++) {
+      const from = i * d.perPage + 1, to = Math.min((i + 1) * d.perPage, d.total);
+      const o = el("option", "", (i + 1) + " of " + d.pages + " · " + from + "–" + to);
+      o.value = i;
+      p.pick.append(o);
+    }
+    const where = el("div", "where");
+    where.append(p.pick);
+    box.replaceChildren(p.prev, where, p.next);
   }
-  pick.onchange = () => go(Number(pick.value));
-  where.append(pick);
-  box.append(prev, where, next);
+  p.prev.disabled = d.page <= 0;
+  p.next.disabled = d.page >= d.pages - 1;
+  p.prev.onclick = () => go(d.page - 1);
+  p.next.onclick = () => go(d.page + 1);
+  p.pick.onchange = () => { const n = Number(p.pick.value); p.pick.blur(); go(n); };
+  if (document.activeElement !== p.pick) p.pick.value = String(d.page);
 }
 
 function pagers(top, bottom, d, go) {
@@ -536,6 +541,7 @@ function renderUpNextTools(d) {
   pick.onclick = e => e.stopPropagation();
   pick.onchange = () => {
     nextPick = Number(pick.value);
+    pick.blur(); // the row is redrawn as the page refreshes again
     api("pc/settings", {nextCount: nextPick}).catch(() => {}); // the Q2's row says it too
   };
   const next = button("Download Next", "quiet", async () => {

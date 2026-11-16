@@ -48,6 +48,8 @@ type pcEpisodeJSON struct {
 	Cut        string    `json:"cut,omitempty"`
 	NotRemoved string    `json:"notRemoved,omitempty"` // on the Q2 with its ads: why (Ads Not Removed)
 	UpNext     bool      `json:"upNext"`
+	Getting    bool      `json:"getting,omitempty"`   // a press's lookup under way (its show being read)
+	GetFailed  string    `json:"getFailed,omitempty"` // why a press couldn't download it
 }
 
 // pcEpisodes is a page of the account's episodes as the phone page shows them, the library looked
@@ -61,11 +63,22 @@ func (w *web) pcEpisodes(eps []pocketcasts.Episode) []pcEpisodeJSON {
 	}
 	found, ok := a.lib.PCEpisodes(pcIDs(eps))
 	var not map[string]string
+	a.pending.Lock()
+	getting, failed := map[string]bool{}, map[string]string{}
+	for _, e := range eps {
+		if a.getting[e.UUID] {
+			getting[e.UUID] = true
+		}
+		if f := a.getFailed[e.UUID]; f != "" {
+			failed[e.UUID] = f
+		}
+	}
+	a.pending.Unlock()
 	out := make([]pcEpisodeJSON, 0, len(eps))
 	for i, e := range eps {
 		j := pcEpisodeJSON{Podcast: e.Show(), UUID: e.UUID, Title: e.Title, Show: cmpOr(a.sy.title(e.Show()), e.PodcastTitle),
 			Published: e.Date(), Duration: int(e.Duration), PlayedUpTo: int(e.PlayedUpTo), Status: int(e.Status),
-			Starred: e.Starred, UpNext: in[e.UUID]}
+			Starred: e.Starred, UpNext: in[e.UUID], Getting: getting[e.UUID], GetFailed: failed[e.UUID]}
 		if ep := found[i]; ok[i] {
 			j.Key, j.EID, j.OnCard = ep.Key, ep.EID, ep.OnCard
 			if j.Duration == 0 {

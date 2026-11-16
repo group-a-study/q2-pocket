@@ -40,6 +40,9 @@ type Episode struct {
 	Length   int64     `json:"length,omitempty"` // bytes, as the feed claims; often wrong
 	Image    string    `json:"image,omitempty"`  // its own art (itunes:image), when it has one
 	PC       string    `json:"pc,omitempty"`     // Pocket Casts' id for it, when it came from there
+	// Extra: not in the show's own list (an episode the account has, in Up Next say, that the show
+	// has since dropped or published again under a new id), added from the account's copy and kept
+	Extra bool `json:"extra,omitempty"`
 
 	// For finding sponsor reads (package sponsor): its transcript (Podcasting 2.0) and its MIME
 	// type, its chapters' address, and the YouTube videos ("yt:<id>") and Spotify episodes

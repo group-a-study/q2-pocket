@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -231,6 +232,44 @@ func (l *Library) PCEpisode(podcast, uuid string) (EpisodeInfo, error) {
 	}
 	l.mu.Unlock()
 	return EpisodeInfo{}, ErrNoEpisode
+}
+
+// AddPC adds an episode of the account (Up Next, a list) that its show's list lacks to the show,
+// from the account's own copy of it: its id, title, date and audio's address (the user's,
+// 2026-11-16: The Idiot's chapters 2-5 were in Up Next under ids the show had since published them
+// again under, and This American Life's episode from June had left its feed; neither downloaded).
+// It stays when the show is fetched again (feed.Episode.Extra). The show must be the library's.
+func (l *Library) AddPC(e pocketcasts.Episode) (EpisodeInfo, error) {
+	if e.UUID == "" || e.URL == "" || !feed.Audio(e.FileType, e.URL) {
+		return EpisodeInfo{}, ErrNoEpisode
+	}
+	when, _ := time.Parse(time.RFC3339, e.Published)
+	fe := feed.Episode{GUID: e.UUID, PC: e.UUID, Title: cmpOr(e.Title, "Untitled episode"), Date: when,
+		Duration: int(e.Duration), URL: e.URL, Type: e.FileType, Length: int64(e.Size), Extra: true}
+	l.mu.Lock()
+	s := l.byPC(e.Show())
+	if s == nil {
+		l.mu.Unlock()
+		return EpisodeInfo{}, ErrNoShow
+	}
+	c := &cache{Checked: time.Time{}}
+	if s.c != nil {
+		*c = *s.c
+	}
+	for _, x := range c.Episodes {
+		if x.PC == e.UUID || x.GUID == e.UUID {
+			l.mu.Unlock()
+			return l.PCEpisode(e.Show(), e.UUID)
+		}
+	}
+	c.Episodes = append(append([]feed.Episode(nil), c.Episodes...), fe)
+	sort.SliceStable(c.Episodes, func(i, j int) bool { return c.Episodes[i].Date.After(c.Episodes[j].Date) })
+	s.setCache(c)
+	key := s.Key
+	b, _ := json.Marshal(c)
+	l.mu.Unlock()
+	l.saveCache(key, b)
+	return l.PCEpisode(e.Show(), e.UUID)
 }
 
 // PCID is an episode as Pocket Casts names it: its show's id and its own.

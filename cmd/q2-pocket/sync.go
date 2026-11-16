@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"q2-pocket/internal/clean"
 	"q2-pocket/internal/library"
@@ -395,6 +396,12 @@ func (s *syncer) episode(ctx context.Context, e pocketcasts.Episode) (library.Ep
 	}
 	lib.Refresh(ctx, si.Key)
 	if ep, err = lib.PCEpisode(e.Show(), e.UUID); err != nil {
+		// not in the library's copy of the show (older than its newest MaxEpisodes, dropped from its
+		// feed, or published again under another id): added, at the address the show's full list on
+		// Pocket Casts gives it now, else the account's own copy's
+		ep, err = lib.AddPC(s.fromShow(ctx, e))
+	}
+	if err != nil {
 		s.mu.Lock()
 		s.missed[e.UUID] = time.Now()
 		s.mu.Unlock()
@@ -465,6 +472,70 @@ func (s *syncer) download(ctx context.Context, up []pocketcasts.Episode) {
 			s.downloadAll(false)
 		}
 	}
+}
+
+// fromShow is an episode of the account (Up Next, a list) with the address its show's full list on
+// Pocket Casts gives it now: found by its id, else by its title within a month of its date (the
+// user's, 2026-11-16: of 1,372 episodes in Up Next, 80 failed at the address the account had kept,
+// most behind Chartable's links, gone since 2024; the show's list had a live one for 46, and 7 more
+// had been published again under new ids, a few days apart at most). Its id stays the account's.
+func (s *syncer) fromShow(ctx context.Context, e pocketcasts.Episode) pocketcasts.Episode {
+	done := clean.Exclusive() // a show's whole list, read whole
+	sh, _, _, err := s.a.pc.Full(ctx, e.Show(), "")
+	done()
+	if err != nil || sh == nil {
+		return e
+	}
+	if c := sameEpisode(e, sh.Episodes); c != nil && c.URL != "" {
+		e.URL, e.FileType = c.URL, cmpOr(c.FileType, e.FileType)
+		if e.Duration == 0 {
+			e.Duration = c.Duration
+		}
+		if e.Size == 0 {
+			e.Size = c.FileSize
+		}
+	}
+	return e
+}
+
+// sameEpisode is e in a show's list: by its id, else the nearest of those with its title (letters
+// and digits alike) published within a month of it; nil for none.
+func sameEpisode(e pocketcasts.Episode, eps []pocketcasts.CacheEpisode) *pocketcasts.CacheEpisode {
+	for i := range eps {
+		if eps[i].UUID == e.UUID {
+			return &eps[i]
+		}
+	}
+	want, when := titleKey(e.Title), e.Date()
+	if want == "" || when.IsZero() {
+		return nil
+	}
+	var best *pocketcasts.CacheEpisode
+	gap := 31 * 24 * time.Hour
+	for i := range eps {
+		at, err := time.Parse(time.RFC3339, eps[i].Published)
+		if err != nil || titleKey(eps[i].Title) != want {
+			continue
+		}
+		if d := at.Sub(when).Abs(); d <= gap {
+			best, gap = &eps[i], d
+		}
+	}
+	return best
+}
+
+// titleKey is a title as compared: lower case, its letters and digits, single spaces.
+func titleKey(t string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(t), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}), " ")
+}
+
+// unmiss lets the next lookup of an episode go to its show again, however lately one missed it.
+func (s *syncer) unmiss(uuid string) {
+	s.mu.Lock()
+	delete(s.missed, uuid)
+	s.mu.Unlock()
 }
 
 // keptOff is whether the user kept the episode id ("<key>:<eid>") off the Q2.

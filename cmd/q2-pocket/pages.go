@@ -324,14 +324,28 @@ func (a *app) pcGet(id string) q2spot.Reply {
 	}
 	a.getting[e.UUID] = true
 	a.pending.Unlock()
+	a.sy.unmiss(e.UUID) // a press looks again, however lately a sync missed it
 	go func() {
 		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
 		defer cancel()
+		why := ""
 		if ep, err := a.sy.episode(ctx, e); err == nil {
-			a.get(ep.Key, ep.EID)
+			if _, err := a.get(ep.Key, ep.EID); err != nil {
+				why = say(err)
+			}
+		} else {
+			why = "Pocket Casts has no audio for it to download"
 		}
 		a.pending.Lock()
 		delete(a.getting, e.UUID)
+		if why != "" { // the phone page says so on its row, rather than nothing happening
+			if a.getFailed == nil {
+				a.getFailed = map[string]string{}
+			}
+			a.getFailed[e.UUID] = why
+		} else {
+			delete(a.getFailed, e.UUID)
+		}
 		a.pending.Unlock()
 	}()
 	return q2spot.Reply{Message: "Downloading"}
